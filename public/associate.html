@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Timesheet — AP & Partners</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div id="topbar"></div>
+  <main>
+    <div id="alert" class="alert hidden"></div>
+
+    <!-- New entry tab -->
+    <section id="tab-new" class="tab-panel active">
+      <h1 class="page-title">Log time</h1>
+      <div class="card">
+        <h3 class="card-title">New timesheet entry</h3>
+        <form id="entry-form" enctype="multipart/form-data">
+          <div class="form-grid cols-3">
+            <div class="form-row">
+              <label>Date</label>
+              <input type="date" name="entry_date" id="f-date" required>
+            </div>
+            <div class="form-row">
+              <label>Client</label>
+              <select name="client_id" id="f-client" required></select>
+            </div>
+            <div class="form-row">
+              <label>Matter / File No.</label>
+              <select name="matter_id" id="f-matter" required></select>
+            </div>
+            <div class="form-row">
+              <label>Activity type</label>
+              <select name="activity_type" id="f-activity" required>
+                <option value="drafting">Drafting</option>
+                <option value="court">Court appearance</option>
+                <option value="research">Research</option>
+                <option value="meeting">Meeting</option>
+                <option value="call">Call</option>
+                <option value="travel">Travel</option>
+                <option value="admin">Admin</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Start time</label>
+              <input type="time" name="start_time" id="f-start">
+            </div>
+            <div class="form-row">
+              <label>End time</label>
+              <input type="time" name="end_time" id="f-end">
+            </div>
+            <div class="form-row">
+              <label>Hours (auto from times, or enter manually)</label>
+              <input type="number" step="0.25" min="0" name="hours" id="f-hours" placeholder="e.g. 2.5">
+            </div>
+            <div class="form-row checkbox-row">
+              <input type="checkbox" id="f-billable" name="is_billable" checked>
+              <label for="f-billable" style="text-transform:none;font-size:13px;font-weight:500;color:var(--text);">Billable to client</label>
+            </div>
+            <div class="form-row">
+              <label>Submit as</label>
+              <select name="status" id="f-status">
+                <option value="submitted" selected>Submit for approval</option>
+                <option value="draft">Save as draft</option>
+              </select>
+            </div>
+            <div class="form-row full">
+              <label>Task description</label>
+              <input type="text" name="description" id="f-desc" placeholder="What did you work on?" required>
+            </div>
+            <div class="form-row full">
+              <label>Notes (optional)</label>
+              <textarea name="notes" id="f-notes" placeholder="Any additional context"></textarea>
+            </div>
+            <div class="form-row full">
+              <label>Attachment (optional)</label>
+              <input type="file" name="file" id="f-file">
+            </div>
+          </div>
+          <div style="margin-top:14px; display:flex; gap:8px;">
+            <button type="submit" class="btn btn-accent">Save entry</button>
+            <button type="reset" class="btn btn-ghost">Reset</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- My entries tab -->
+    <section id="tab-mine" class="tab-panel">
+      <h1 class="page-title">My timesheet</h1>
+      <div class="card">
+        <h3 class="card-title">
+          Filter
+          <span class="actions">
+            <button class="btn btn-sm" onclick="loadMyEntries()">Refresh</button>
+          </span>
+        </h3>
+        <div class="form-grid cols-4">
+          <div class="form-row"><label>From</label><input type="date" id="ff-from"></div>
+          <div class="form-row"><label>To</label><input type="date" id="ff-to"></div>
+          <div class="form-row"><label>Status</label>
+            <select id="ff-status">
+              <option value="">All</option>
+              <option value="draft">Draft</option>
+              <option value="submitted">Submitted</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="invoiced">Invoiced</option>
+            </select>
+          </div>
+          <div class="form-row" style="align-items:flex-end;">
+            <button class="btn" onclick="loadMyEntries()">Apply</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Entries</h3>
+        <div id="my-entries-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Monthly summary -->
+    <section id="tab-month" class="tab-panel">
+      <h1 class="page-title">Monthly summary</h1>
+      <div class="kpi-grid" id="month-kpis"></div>
+      <div class="card">
+        <h3 class="card-title">Hours by client this month</h3>
+        <div id="month-table" class="table-wrap"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/associate.js"></script>
+</body>
+</html>

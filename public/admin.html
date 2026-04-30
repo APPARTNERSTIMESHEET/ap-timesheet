@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin — AP & Partners Timesheet</title>
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <div id="topbar"></div>
+  <main>
+    <div id="alert" class="alert hidden"></div>
+
+    <!-- Dashboard -->
+    <section id="tab-dashboard" class="tab-panel active">
+      <h1 class="page-title">Dashboard</h1>
+      <div class="kpi-grid" id="dash-kpis"></div>
+      <div class="card">
+        <h3 class="card-title">Pending approvals
+          <span class="actions"><button class="btn btn-sm" onclick="loadPending()">Refresh</button></span>
+        </h3>
+        <div id="pending-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Timesheets -->
+    <section id="tab-entries" class="tab-panel">
+      <h1 class="page-title">All timesheets</h1>
+      <div class="card">
+        <h3 class="card-title">Filter</h3>
+        <div class="form-grid cols-4">
+          <div class="form-row"><label>From</label><input type="date" id="af-from"></div>
+          <div class="form-row"><label>To</label><input type="date" id="af-to"></div>
+          <div class="form-row"><label>Associate</label><select id="af-user"><option value="">All</option></select></div>
+          <div class="form-row"><label>Client</label><select id="af-client"><option value="">All</option></select></div>
+          <div class="form-row"><label>Matter</label><select id="af-matter"><option value="">All</option></select></div>
+          <div class="form-row"><label>Status</label>
+            <select id="af-status">
+              <option value="">All</option>
+              <option value="draft">Draft</option>
+              <option value="submitted">Submitted</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="invoiced">Invoiced</option>
+            </select>
+          </div>
+          <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadAllEntries()">Apply</button></div>
+          <div class="form-row" style="align-items:flex-end;"><button class="btn btn-ghost" onclick="exportEntriesCSV()">Export CSV</button></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Entries
+          <span class="actions">
+            <button class="btn btn-sm btn-success" onclick="bulkApprove()">Approve selected</button>
+          </span>
+        </h3>
+        <div id="all-entries-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Billing -->
+    <section id="tab-billing" class="tab-panel">
+      <h1 class="page-title">Billing &amp; invoicing</h1>
+      <div class="card">
+        <h3 class="card-title">Generate invoice</h3>
+        <p class="card-subtitle">Pulls all <strong>approved + billable</strong> entries for the client/period and turns them into invoice line items based on each matter's billing rule.</p>
+        <div class="form-grid cols-4">
+          <div class="form-row"><label>Client</label><select id="bi-client"></select></div>
+          <div class="form-row"><label>Period from</label><input type="date" id="bi-from"></div>
+          <div class="form-row"><label>Period to</label><input type="date" id="bi-to"></div>
+          <div class="form-row"><label>Invoice date</label><input type="date" id="bi-date"></div>
+          <div class="form-row"><label>Tax rate %</label><input type="number" step="0.01" id="bi-tax" value="18"></div>
+          <div class="form-row full"><label>Notes</label><input id="bi-notes" placeholder="e.g. Payment terms: 15 days"></div>
+        </div>
+        <div style="margin-top:14px; display:flex; gap:8px;">
+          <button class="btn btn-ghost" onclick="previewInvoice()">Preview line items</button>
+          <button class="btn btn-accent" onclick="createInvoice()">Generate invoice</button>
+        </div>
+        <div id="bi-preview" style="margin-top:14px;"></div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">Invoices
+          <span class="actions"><button class="btn btn-sm" onclick="loadInvoices()">Refresh</button></span>
+        </h3>
+        <div id="invoices-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Reports -->
+    <section id="tab-reports" class="tab-panel">
+      <h1 class="page-title">Reports</h1>
+      <div class="card">
+        <h3 class="card-title">Hours summary</h3>
+        <div class="form-grid cols-4">
+          <div class="form-row"><label>From</label><input type="date" id="rp-from"></div>
+          <div class="form-row"><label>To</label><input type="date" id="rp-to"></div>
+          <div class="form-row"><label>Group by</label>
+            <select id="rp-group">
+              <option value="user">Associate</option>
+              <option value="client">Client</option>
+              <option value="matter">Matter</option>
+              <option value="activity">Activity</option>
+            </select>
+          </div>
+          <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadReport()">Run</button></div>
+        </div>
+        <div id="report-out" style="margin-top:14px;"></div>
+      </div>
+    </section>
+
+    <!-- Masters -->
+    <section id="tab-masters" class="tab-panel">
+      <h1 class="page-title">Masters</h1>
+      <div class="tabs">
+        <button class="active" data-mtab="m-users">Users</button>
+        <button data-mtab="m-clients">Clients</button>
+        <button data-mtab="m-matters">Matters</button>
+        <button data-mtab="m-rates">Rate cards</button>
+      </div>
+
+      <div id="m-users" class="tab-panel active">
+        <div class="card">
+          <h3 class="card-title">Users <span class="actions"><button class="btn btn-sm btn-accent" onclick="newUser()">+ New user</button></span></h3>
+          <div id="users-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <div id="m-clients" class="tab-panel">
+        <div class="card">
+          <h3 class="card-title">Clients <span class="actions"><button class="btn btn-sm btn-accent" onclick="newClient()">+ New client</button></span></h3>
+          <div id="clients-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <div id="m-matters" class="tab-panel">
+        <div class="card">
+          <h3 class="card-title">Matters <span class="actions"><button class="btn btn-sm btn-accent" onclick="newMatter()">+ New matter</button></span></h3>
+          <div id="matters-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <div id="m-rates" class="tab-panel">
+        <div class="card">
+          <h3 class="card-title">Per-matter rate overrides
+            <span class="actions"><button class="btn btn-sm btn-accent" onclick="newRate()">+ Add rate</button></span>
+          </h3>
+          <p class="card-subtitle">Set a custom hourly rate for an associate on a specific matter. If no row is set, the associate's default rate (or the matter rate, depending on billing type) is used.</p>
+          <div id="rates-table" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/admin.js"></script>
+</body>
+</html>

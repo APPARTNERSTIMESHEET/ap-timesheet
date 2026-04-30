@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AP & Partners — Timesheet</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231f2a44'/%3E%3Ctext x='32' y='42' font-family='Helvetica' font-size='24' font-weight='700' text-anchor='middle' fill='%23b08d57'%3EA%26P%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+  <div class="login-shell">
+    <div class="login-card">
+      <div class="brand">
+        <img class="brand-logo brand-logo-lg" src="/img/logo.png" alt="AP & Partners" onerror="this.style.display='none'">
+        <div class="brand-text"><strong>AP &amp; Partners</strong><small>Advocates &amp; Solicitors</small></div>
+      </div>
+      <h2>Timesheet &amp; Billing — Sign in</h2>
+      <div id="alert" class="alert hidden"></div>
+      <form id="login-form">
+        <div class="form-row">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@appartners.in">
+        </div>
+        <div class="form-row">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" required autocomplete="current-password" placeholder="••••••••">
+        </div>
+        <button class="btn btn-accent" type="submit" id="login-btn">Sign in</button>
+      </form>
+      <div class="login-footer">
+        First-time admin: <code>it@appartners.in / Admin@123</code><br>
+        Change immediately after first login.
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/common.js"></script>
+  <script>
+    // If already signed in, route to the right page
+    (function () {
+      const u = Auth.user();
+      if (Auth.token() && u) {
+        location.href = u.role === 'admin' ? '/admin' : '/associate';
+      }
+    })();
+
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+      const btn = document.getElementById('login-btn');
+      btn.disabled = true; btn.textContent = 'Signing in...';
+      try {
+        const res = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+        Auth.setSession(res.token, res.user);
+        location.href = res.user.role === 'admin' ? '/admin' : '/associate';
+      } catch (e) {
+        showAlert('alert', e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>
