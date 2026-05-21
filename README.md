@@ -143,7 +143,8 @@ ap-timesheet/
 │   └── auth.js              # JWT + role guards
 ├── utils/
 │   ├── db.js                # SQLite connection
-│   └── invoice.js           # PDF invoice generator
+│   ├── billing.js           # Billing engine — turns approved entries into invoice items
+│   └── invoice-pdf.js       # PDF invoice generator (PDFKit)
 ├── routes/
 │   ├── auth.js
 │   ├── timesheet.js

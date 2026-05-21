@@ -3,31 +3,53 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Admin — AP & Partners Timesheet</title>
-  <link rel="stylesheet" href="/css/styles.css">
+  <title>Admin — AP &amp; Partners</title>
+  <link rel="stylesheet" href="/css/styles.css?v=20260520-scanfix2">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 </head>
 <body>
+
   <div id="topbar"></div>
+
+  <div class="admin-toolbar" id="admin-toolbar">
+    <div class="admin-toolbar-inner">
+      <select class="form-control" id="dept-filter" onchange="onDeptFilter()" title="Filter by Department" style="font-size:12px;padding:5px 10px;max-width:200px;">
+        <option value="">All Departments</option>
+      </select>
+      <span id="th-date" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+  </div>
+
   <main>
     <div id="alert" class="alert hidden"></div>
 
-    <!-- Dashboard -->
+    <!-- ══════ DASHBOARD ══════ -->
     <section id="tab-dashboard" class="tab-panel active">
-      <h1 class="page-title">Dashboard</h1>
-      <div class="kpi-grid" id="dash-kpis"></div>
+      <div class="kpi-grid-2" id="dash-kpis"></div>
+      <div class="dash-panels">
+        <div class="card">
+          <div class="card-title">Monthly Calendar</div>
+          <div class="mini-cal" id="mini-cal"></div>
+        </div>
+        <div class="card chart-card">
+          <div class="card-title">
+            Hours by Associate — This Month
+            <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadDashboard()">↻ Refresh</button></span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart-hours"></canvas></div>
+        </div>
+      </div>
       <div class="card">
-        <h3 class="card-title">Pending approvals
-          <span class="actions"><button class="btn btn-sm" onclick="loadPending()">Refresh</button></span>
-        </h3>
-        <div id="pending-table" class="table-wrap"></div>
+        <div class="card-title">Pending approvals — requires action</div>
+        <div id="dash-pending" class="table-wrap"></div>
       </div>
     </section>
 
-    <!-- Timesheets -->
+    <!-- ══════ TIMESHEETS ══════ -->
     <section id="tab-entries" class="tab-panel">
-      <h1 class="page-title">All timesheets</h1>
       <div class="card">
-        <h3 class="card-title">Filter</h3>
+        <div class="card-title">Filter timesheets</div>
         <div class="form-grid cols-4">
           <div class="form-row"><label>From</label><input type="date" id="af-from"></div>
           <div class="form-row"><label>To</label><input type="date" id="af-to"></div>
@@ -49,110 +71,1002 @@
         </div>
       </div>
       <div class="card">
-        <h3 class="card-title">Entries
-          <span class="actions">
-            <button class="btn btn-sm btn-success" onclick="bulkApprove()">Approve selected</button>
-          </span>
-        </h3>
+        <div class="card-title">Entries <span class="actions" id="bulk-actions"></span></div>
         <div id="all-entries-table" class="table-wrap"></div>
       </div>
     </section>
 
-    <!-- Billing -->
+    <!-- ══════ BILLING ══════ -->
     <section id="tab-billing" class="tab-panel">
-      <h1 class="page-title">Billing &amp; invoicing</h1>
-      <div class="card">
-        <h3 class="card-title">Generate invoice</h3>
-        <p class="card-subtitle">Pulls all <strong>approved + billable</strong> entries for the client/period and turns them into invoice line items based on each matter's billing rule.</p>
-        <div class="form-grid cols-4">
-          <div class="form-row"><label>Client</label><select id="bi-client"></select></div>
-          <div class="form-row"><label>Period from</label><input type="date" id="bi-from"></div>
-          <div class="form-row"><label>Period to</label><input type="date" id="bi-to"></div>
-          <div class="form-row"><label>Invoice date</label><input type="date" id="bi-date"></div>
-          <div class="form-row"><label>Tax rate %</label><input type="number" step="0.01" id="bi-tax" value="18"></div>
-          <div class="form-row full"><label>Notes</label><input id="bi-notes" placeholder="e.g. Payment terms: 15 days"></div>
-        </div>
-        <div style="margin-top:14px; display:flex; gap:8px;">
-          <button class="btn btn-ghost" onclick="previewInvoice()">Preview line items</button>
-          <button class="btn btn-accent" onclick="createInvoice()">Generate invoice</button>
-        </div>
-        <div id="bi-preview" style="margin-top:14px;"></div>
+      <div class="subtabs">
+        <button class="subtab-btn active" data-stab="stab-generate">Generate Invoice</button>
+        <button class="subtab-btn" data-stab="stab-manual">Manual Invoice</button>
+        <button class="subtab-btn" data-stab="stab-invoices">All Invoices</button>
       </div>
 
-      <div class="card">
-        <h3 class="card-title">Invoices
-          <span class="actions"><button class="btn btn-sm" onclick="loadInvoices()">Refresh</button></span>
-        </h3>
-        <div id="invoices-table" class="table-wrap"></div>
+      <div id="stab-generate" class="subtab-panel active">
+        <div class="card">
+          <div class="card-title">Generate invoice</div>
+          <p class="card-subtitle">Pulls all <strong>approved + billable</strong> entries for the selected client/period and builds invoice line items.</p>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Client</label><select id="bi-client"></select></div>
+            <div class="form-row"><label>Firm / GSTIN</label>
+              <select id="bi-firm-entity">
+                <option value="delhi">Delhi — 07ABPFA8851M1ZP</option>
+                <option value="haryana">Haryana — 06ABPFA8851M1ZR</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Period from</label><input type="date" id="bi-from"></div>
+            <div class="form-row"><label>Period to</label><input type="date" id="bi-to"></div>
+            <div class="form-row"><label>Invoice date</label><input type="date" id="bi-date"></div>
+            <div class="form-row"><label>Due date</label><input type="date" id="bi-due"></div>
+            <div class="form-row"><label>Currency</label>
+              <select id="bi-currency" onchange="onCurrencyChange(this.value)">
+                <option value="INR">INR — Indian Rupee</option>
+                <option value="USD">USD — US Dollar ($)</option>
+                <option value="EUR">EUR — Euro (€)</option>
+                <option value="GBP">GBP — British Pound (£)</option>
+                <option value="SGD">SGD — Singapore Dollar</option>
+                <option value="AED">AED — UAE Dirham</option>
+              </select>
+            </div>
+            <div class="form-row" id="bi-fx-row" style="display:none;">
+              <label>Exchange Rate <span id="bi-fx-label" style="color:var(--muted);font-weight:400;">(1 USD = ? INR)</span></label>
+              <input type="number" step="0.0001" min="0.0001" id="bi-fx-rate" placeholder="e.g. 84.50" value="">
+            </div>
+            <div class="form-row" id="bi-tax-type-row">
+              <label>GST Type <span style="font-size:10px;color:var(--muted);font-weight:400;">(INR only)</span></label>
+              <select id="bi-tax-type">
+                <option value="auto">Auto-detect (by state code)</option>
+                <option value="intra_state">Intra-state — CGST + SGST</option>
+                <option value="inter_state">Inter-state — IGST only</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Tax rate % <span style="font-size:10px;color:var(--muted);font-weight:400;" id="bi-tax-hint">(GST)</span></label><input type="number" step="0.01" id="bi-tax" value="18"></div>
+            <div class="form-row"><label>Invoice No. <span style="font-size:10px;color:var(--muted);font-weight:400;">(blank = auto-generate)</span></label><input type="text" id="bi-inv-no" placeholder="e.g. AP/2026/0042"></div>
+            <div class="form-row"><label>Discount <span style="font-size:10px;color:var(--muted);font-weight:400;">(optional)</span></label>
+              <div style="display:flex;gap:4px;">
+                <select id="bi-disc-type" style="width:80px;" onchange="biEdRecalcTotals()">
+                  <option value="flat">Flat ₹</option>
+                  <option value="percent">Percent %</option>
+                </select>
+                <input type="number" step="0.01" min="0" id="bi-disc-amt" value="0" oninput="biEdRecalcTotals()" style="flex:1;">
+              </div>
+            </div>
+            <div class="form-row"><label>Discount note <span style="font-size:10px;color:var(--muted);font-weight:400;">(shown on PDF)</span></label><input type="text" id="bi-disc-note" placeholder="e.g. Loyalty discount, Festive offer"></div>
+            <div class="form-row full"><label>Notes</label><input id="bi-notes" placeholder="e.g. Payment terms: 30 days"></div>
+          </div>
+          <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button class="btn btn-ghost" onclick="previewInvoice()">👁 Preview line items</button>
+            <button class="btn btn-ghost" onclick="downloadDraftExcel()" id="bi-draft-btn" style="display:none;">⬇ Download Draft (Excel)</button>
+            <button class="btn btn-warning" onclick="saveInvoiceDraft()" id="bi-save-draft-btn" style="display:none;">💾 Save as Draft</button>
+            <button class="btn btn-accent" onclick="createInvoice()">⚡ Issue Invoice</button>
+          </div>
+          <div id="bi-preview" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <!-- ══ MANUAL INVOICE ══ -->
+      <div id="stab-manual" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Manual Invoice</div>
+          <p class="card-subtitle">Create an invoice with custom line items — no timesheet entries required.</p>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Client</label><select id="mi-client"></select></div>
+            <div class="form-row"><label>Firm / GSTIN</label>
+              <select id="mi-firm-entity">
+                <option value="delhi">Delhi — 07ABPFA8851M1ZP</option>
+                <option value="haryana">Haryana — 06ABPFA8851M1ZR</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Invoice date</label><input type="date" id="mi-date"></div>
+            <div class="form-row"><label>Due date</label><input type="date" id="mi-due"></div>
+            <div class="form-row"><label>Invoice No. <span style="font-size:10px;color:var(--muted);font-weight:400;">(leave blank to auto-generate)</span></label><input type="text" id="mi-inv-no" placeholder="e.g. AP/2025/0042"></div>
+            <div class="form-row"><label>Period from</label><input type="date" id="mi-from"></div>
+            <div class="form-row"><label>Period to</label><input type="date" id="mi-to"></div>
+            <div class="form-row"><label>State <span style="font-size:10px;color:var(--muted);font-weight:400;">(Place of Supply)</span></label><input type="text" id="mi-state" placeholder="e.g. Delhi"></div>
+            <div class="form-row"><label>State Code</label><input type="text" id="mi-statecode" maxlength="2" placeholder="e.g. 07" style="width:70px;"></div>
+            <div class="form-row"><label>Currency</label>
+              <select id="mi-currency" onchange="onManualCurrencyChange(this.value)">
+                <option value="INR">INR — Indian Rupee</option>
+                <option value="USD">USD — US Dollar ($)</option>
+                <option value="EUR">EUR — Euro (€)</option>
+                <option value="GBP">GBP — British Pound (£)</option>
+                <option value="SGD">SGD — Singapore Dollar</option>
+                <option value="AED">AED — UAE Dirham</option>
+              </select>
+            </div>
+            <div class="form-row" id="mi-fx-row" style="display:none;">
+              <label>Exchange Rate <span id="mi-fx-label" style="color:var(--muted);font-weight:400;">(1 USD = ? INR)</span></label>
+              <input type="number" step="0.0001" min="0.0001" id="mi-fx-rate" placeholder="e.g. 84.50">
+            </div>
+            <div class="form-row" id="mi-tax-type-row">
+              <label>GST Type <span style="font-size:10px;color:var(--muted);font-weight:400;">(INR only)</span></label>
+              <select id="mi-tax-type">
+                <option value="auto">Auto-detect (by state code)</option>
+                <option value="intra_state">Intra-state — CGST + SGST</option>
+                <option value="inter_state">Inter-state — IGST only</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Tax rate % <span style="font-size:10px;color:var(--muted);font-weight:400;" id="mi-tax-hint">(GST)</span></label><input type="number" step="0.01" id="mi-tax" value="18"></div>
+            <div class="form-row full"><label>Notes</label><input id="mi-notes" placeholder="e.g. As per retainer agreement dated..."></div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+          <div class="card-title">
+            Line Items
+            <span class="actions"><button class="btn btn-sm btn-accent" onclick="miAddRow()">+ Add Line Item</button></span>
+          </div>
+          <div class="table-wrap" style="overflow-x:auto;">
+            <table class="data" id="mi-items-table">
+              <thead>
+                <tr>
+                  <th style="min-width:280px;">Description</th>
+                  <th style="width:90px;">HSN Code</th>
+                  <th style="width:80px;">Qty</th>
+                  <th style="width:70px;">Unit</th>
+                  <th style="width:110px;">Rate</th>
+                  <th style="width:120px;">Amount</th>
+                  <th style="width:40px;"></th>
+                </tr>
+              </thead>
+              <tbody id="mi-items-body"></tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="5" style="text-align:right;font-weight:600;padding:10px 8px;">Value of Services (before tax)</td>
+                  <td style="text-align:right;font-weight:700;padding:10px 8px;" id="mi-subtotal">0.00</td>
+                  <td></td>
+                </tr>
+                <tr id="mi-tax-row">
+                  <td colspan="5" style="text-align:right;padding:4px 8px;font-size:12px;color:var(--muted);" id="mi-tax-label">GST (Reverse Charge — payable by client)</td>
+                  <td style="text-align:right;padding:4px 8px;font-size:12px;color:var(--muted);" id="mi-tax-amt">0.00</td>
+                  <td></td>
+                </tr>
+                <tr>
+                  <td colspan="5" style="text-align:right;font-weight:700;font-size:14px;padding:10px 8px;border-top:2px solid var(--border);">Total Payable to Firm</td>
+                  <td style="text-align:right;font-weight:700;font-size:14px;padding:10px 8px;border-top:2px solid var(--border);" id="mi-total">0.00</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div style="margin-top:16px;display:flex;gap:8px;">
+            <button class="btn btn-accent" onclick="createManualInvoice()">⚡ Generate Invoice</button>
+          </div>
+          <div id="mi-alert" class="alert hidden" style="margin-top:10px;"></div>
+        </div>
+      </div>
+
+      <div id="stab-invoices" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">
+            Invoices
+            <span class="actions">
+              <select id="inv-filter-status" onchange="loadInvoices()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
+                <option value="">All status</option>
+                <option value="issued">Issued</option>
+                <option value="paid">Paid</option>
+                <option value="overdue">Overdue</option>
+                <option value="draft">Draft</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <select id="inv-filter-review" onchange="loadInvoices()" title="Filter drafts by review stage" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
+                <option value="">All review stages</option>
+                <option value="unassigned">📝 Drafts (no stage set)</option>
+                <option value="drafting">🟡 Drafting</option>
+                <option value="sent_for_review">📤 Sent for Review</option>
+                <option value="revisions_pending">✏ Revisions Pending</option>
+                <option value="ready_to_issue">✅ Ready to Issue</option>
+              </select>
+              <button class="btn btn-sm" onclick="loadInvoices()">↻ Refresh</button>
+            </span>
+          </div>
+          <div id="invoices-table" class="table-wrap"></div>
+        </div>
       </div>
     </section>
 
-    <!-- Reports -->
-    <section id="tab-reports" class="tab-panel">
-      <h1 class="page-title">Reports</h1>
+    <!-- ══════ OUTSTANDING ══════ -->
+    <section id="tab-outstanding" class="tab-panel">
+      <div class="outstanding-grid" id="ost-summary"></div>
+      <div class="card chart-card">
+        <div class="card-title">Monthly Revenue (last 6 months)</div>
+        <div class="chart-wrap"><canvas id="chart-revenue"></canvas></div>
+      </div>
       <div class="card">
-        <h3 class="card-title">Hours summary</h3>
-        <div class="form-grid cols-4">
-          <div class="form-row"><label>From</label><input type="date" id="rp-from"></div>
-          <div class="form-row"><label>To</label><input type="date" id="rp-to"></div>
-          <div class="form-row"><label>Group by</label>
-            <select id="rp-group">
-              <option value="user">Associate</option>
-              <option value="client">Client</option>
-              <option value="matter">Matter</option>
-              <option value="activity">Activity</option>
+        <div class="card-title">
+          Client-wise Outstanding
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="exportOutstandingCSV()">Export CSV</button></span>
+        </div>
+        <div id="ost-table" class="table-wrap"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Overdue Invoices</div>
+        <div id="overdue-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- ══════ REPORTS ══════ -->
+    <section id="tab-reports" class="tab-panel">
+      <div class="subtabs">
+        <button class="subtab-btn active" data-stab="stab-rp-hours">Hours Summary</button>
+        <button class="subtab-btn" data-stab="stab-rp-util">Utilization</button>
+        <button class="subtab-btn" data-stab="stab-rp-profit">Matter Profitability</button>
+      </div>
+
+      <div id="stab-rp-hours" class="subtab-panel active">
+        <div class="card">
+          <div class="card-title">Hours summary</div>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>From</label><input type="date" id="rp-from"></div>
+            <div class="form-row"><label>To</label><input type="date" id="rp-to"></div>
+            <div class="form-row"><label>Group by</label>
+              <select id="rp-group">
+                <option value="user">Associate</option>
+                <option value="client">Client</option>
+                <option value="matter">Matter</option>
+                <option value="activity">Activity</option>
+              </select>
+            </div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadReport()">Run report</button></div>
+          </div>
+          <div id="report-out" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <div id="stab-rp-util" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Associate utilization</div>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Month</label><input type="month" id="util-month"></div>
+            <div class="form-row"><label>Target hrs/day</label><input type="number" step="0.5" id="util-target" value="8"></div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadUtilization()">Run</button></div>
+          </div>
+          <div id="util-out" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <div id="stab-rp-profit" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Matter-wise profitability</div>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Client</label><select id="pr-client"><option value="">All clients</option></select></div>
+            <div class="form-row"><label>From</label><input type="date" id="pr-from"></div>
+            <div class="form-row"><label>To</label><input type="date" id="pr-to"></div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadProfitability()">Run</button></div>
+          </div>
+          <div id="profit-out" style="margin-top:14px;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════ LEAVES ══════ -->
+    <section id="tab-leaves" class="tab-panel">
+      <div class="subtabs">
+        <button class="subtab-btn active" data-stab="stab-lv-pending">Pending Approvals <span id="lv-pending-count" style="background:#ef4444;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;margin-left:6px;display:none;"></span></button>
+        <button class="subtab-btn" data-stab="stab-lv-all">All Applications</button>
+        <button class="subtab-btn" data-stab="stab-lv-balances">Balances</button>
+        <button class="subtab-btn" data-stab="stab-lv-holidays">Holidays</button>
+        <button class="subtab-btn" data-stab="stab-lv-types">Leave Types</button>
+        <button class="subtab-btn" data-stab="stab-lv-wfh">🏠 WFH <span id="wfh-outer-badge" style="background:#ef4444;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;margin-left:6px;display:none;"></span></button>
+        <button class="subtab-btn" data-stab="stab-lv-reports">Reports</button>
+      </div>
+
+      <!-- Pending approvals -->
+      <div id="stab-lv-pending" class="subtab-panel active">
+        <div class="card">
+          <div class="card-title">
+            Today's status
+            <span class="actions">
+              <button class="btn btn-sm btn-accent" onclick="openManualLeaveModal()">+ Manual Leave Entry</button>
+              <button class="btn btn-sm btn-ghost" onclick="loadLeavesDashboard()">↻ Refresh</button>
+            </span>
+          </div>
+          <div id="lv-dash" class="kpi-grid-2"></div>
+        </div>
+        <div class="card" style="margin-top:14px;">
+          <div class="card-title">Pending leave applications</div>
+          <div id="lv-pending-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <!-- All applications -->
+      <div id="stab-lv-all" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Filter</div>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Associate</label><select id="lv-af-user"><option value="">All</option></select></div>
+            <div class="form-row"><label>Status</label>
+              <select id="lv-af-status">
+                <option value="">All</option>
+                <option value="submitted">Submitted</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+            </div>
+            <div class="form-row"><label>From</label><input type="date" id="lv-af-from"></div>
+            <div class="form-row"><label>To</label><input type="date" id="lv-af-to"></div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadAllLeaves()">Apply</button></div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn btn-ghost" onclick="exportLeavesCSV()">Export CSV</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">
+            Applications
+            <span class="actions"><button class="btn btn-sm btn-accent" onclick="openManualLeaveModal()">+ Manual Leave Entry</button></span>
+          </div>
+          <div id="lv-all-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <!-- Balances -->
+      <div id="stab-lv-balances" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">
+            Leave balances
+            <span class="actions">
+              <select id="lv-bal-year" onchange="loadLeaveBalances()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);"></select>
+              <button class="btn btn-sm btn-accent" onclick="openAllocateModal()">⚡ Bulk Allocate</button>
+            </span>
+          </div>
+          <div id="lv-balances-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <!-- Holidays -->
+      <div id="stab-lv-holidays" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">
+            Holiday calendar
+            <span class="actions">
+              <select id="lv-hol-year" onchange="loadHolidaysAdmin()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);"></select>
+              <button class="btn btn-sm btn-accent" onclick="openHolidayModal()">+ Add Holiday</button>
+            </span>
+          </div>
+          <div id="lv-holidays-table-admin" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <!-- Reports -->
+      <div id="stab-lv-reports" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Leave Reports</div>
+          <p class="card-subtitle">Only <strong>approved</strong> leaves are counted. Choose a year + month for a monthly pivot, leave month blank for a full-year summary, or pick an employee for a month-by-month deep-dive.</p>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Year</label>
+              <select id="lv-rp-year"></select>
+            </div>
+            <div class="form-row"><label>Month</label>
+              <select id="lv-rp-month">
+                <option value="">Full year</option>
+                <option value="1">January</option>
+                <option value="2">February</option>
+                <option value="3">March</option>
+                <option value="4">April</option>
+                <option value="5">May</option>
+                <option value="6">June</option>
+                <option value="7">July</option>
+                <option value="8">August</option>
+                <option value="9">September</option>
+                <option value="10">October</option>
+                <option value="11">November</option>
+                <option value="12">December</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Employee (optional — for deep-dive)</label>
+              <select id="lv-rp-user">
+                <option value="">— Summary of all employees —</option>
+              </select>
+            </div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="runLeaveReport()">Run report</button></div>
+            <div class="form-row" style="align-items:flex-end;"><button class="btn btn-ghost" onclick="exportLeaveReportCSV()">Export CSV</button></div>
+          </div>
+        </div>
+        <div id="lv-rp-out" style="margin-top:14px;"></div>
+      </div>
+
+      <!-- Leave types -->
+      <div id="stab-lv-types" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">
+            Leave types
+            <span class="actions"><button class="btn btn-sm btn-accent" onclick="openLeaveTypeModal()">+ New Type</button></span>
+          </div>
+          <p class="card-subtitle">Defines the kinds of leave employees can apply for. Default quotas auto-allocate when an associate first applies if you haven't bulk-allocated yet.</p>
+          <div id="lv-types-table" class="table-wrap"></div>
+        </div>
+      </div>
+
+      <!-- ── 🏠 WFH (nested sub-tab inside Leaves) ─────────────────────────────
+           Hosts a secondary sub-tab strip (Pending / All / Reports) for WFH.
+           Scope-aware switchSubTab keeps these inner tabs from interfering
+           with the outer Leaves sub-tabs. -->
+      <div id="stab-lv-wfh" class="subtab-panel">
+        <div class="subtabs">
+          <button class="subtab-btn active" data-stab="stab-wfh-pending">Pending Approvals <span id="wfh-pending-count" style="background:#ef4444;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;margin-left:6px;display:none;"></span></button>
+          <button class="subtab-btn" data-stab="stab-wfh-all">All Applications</button>
+          <button class="subtab-btn" data-stab="stab-wfh-reports">Reports</button>
+        </div>
+
+        <!-- Pending approvals -->
+        <div id="stab-wfh-pending" class="subtab-panel active">
+          <div class="card" style="margin:14px;">
+            <div class="card-title">
+              Today's WFH status
+              <span class="actions">
+                <button class="btn btn-sm btn-accent" onclick="openManualWfhModal()">+ Manual WFH Entry</button>
+                <button class="btn btn-sm btn-ghost" onclick="loadWfhDashboard()">↻ Refresh</button>
+              </span>
+            </div>
+            <div id="wfh-dash" class="kpi-grid-2"></div>
+          </div>
+          <div class="card" style="margin:14px;">
+            <div class="card-title">Pending WFH applications</div>
+            <div id="wfh-pending-table" class="table-wrap"></div>
+          </div>
+        </div>
+
+        <!-- All applications -->
+        <div id="stab-wfh-all" class="subtab-panel">
+          <div class="card" style="margin:14px;">
+            <div class="card-title">Filter</div>
+            <div class="form-grid cols-4">
+              <div class="form-row"><label>Associate</label><select id="wfh-af-user"><option value="">All</option></select></div>
+              <div class="form-row"><label>Status</label>
+                <select id="wfh-af-status">
+                  <option value="">All</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+              <div class="form-row"><label>From</label><input type="date" id="wfh-af-from"></div>
+              <div class="form-row"><label>To</label><input type="date" id="wfh-af-to"></div>
+              <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadAllWfh()">Apply</button></div>
+              <div class="form-row" style="align-items:flex-end;"><button class="btn btn-ghost" onclick="exportWfhCSV()">Export CSV</button></div>
+            </div>
+          </div>
+          <div class="card" style="margin:14px;">
+            <div class="card-title">
+              Applications
+              <span class="actions"><button class="btn btn-sm btn-accent" onclick="openManualWfhModal()">+ Manual WFH Entry</button></span>
+            </div>
+            <div id="wfh-all-table" class="table-wrap"></div>
+          </div>
+        </div>
+
+        <!-- Reports -->
+        <div id="stab-wfh-reports" class="subtab-panel">
+          <div class="card" style="margin:14px;">
+            <div class="card-title">WFH report</div>
+            <div class="form-grid cols-4">
+              <div class="form-row"><label>Year</label><select id="wfh-rep-year"></select></div>
+              <div class="form-row"><label>Month</label>
+                <select id="wfh-rep-month">
+                  <option value="">Full year</option>
+                  <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+                  <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+                  <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+                  <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+                </select>
+              </div>
+              <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadWfhReport()">Run report</button></div>
+              <div class="form-row" style="align-items:flex-end;"><button class="btn btn-ghost" onclick="exportWfhReportCSV()">Export CSV</button></div>
+            </div>
+            <div id="wfh-report-out" style="margin-top:14px;"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Allocate modal -->
+    <div class="modal-backdrop hidden" id="lv-allocate-modal">
+      <div class="modal" style="max-width:480px;">
+        <div class="modal-head">
+          <h3>Bulk Allocate Leave</h3>
+          <button class="close" onclick="closeAllocateModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lv-alloc-alert" class="alert hidden"></div>
+          <div class="form-row"><label>Year</label><input type="number" id="lv-alloc-year" value=""></div>
+          <div class="form-row"><label>Leave type</label><select id="lv-alloc-type"></select></div>
+          <div class="form-row"><label>Allocated days (leave blank for type default)</label><input type="number" step="0.5" id="lv-alloc-days" placeholder=""></div>
+          <div class="form-row"><label>Apply to</label>
+            <select id="lv-alloc-scope">
+              <option value="all">All active users</option>
+              <option value="selected">Selected users only</option>
             </select>
           </div>
-          <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadReport()">Run</button></div>
+          <div class="form-row" id="lv-alloc-users-row" style="display:none;"><label>Users (Ctrl/Cmd+click to multi-select)</label>
+            <select id="lv-alloc-users" multiple style="min-height:120px;"></select>
+          </div>
         </div>
-        <div id="report-out" style="margin-top:14px;"></div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeAllocateModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitAllocate()">Allocate</button>
+        </div>
       </div>
-    </section>
+    </div>
 
-    <!-- Masters -->
+    <!-- Holiday modal -->
+    <div class="modal-backdrop hidden" id="lv-holiday-modal">
+      <div class="modal" style="max-width:440px;">
+        <div class="modal-head">
+          <h3 id="lv-hol-title">Add Holiday</h3>
+          <button class="close" onclick="closeHolidayModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lv-hol-alert" class="alert hidden"></div>
+          <div class="form-row"><label>Date</label><input type="date" id="lv-hol-date"></div>
+          <div class="form-row"><label>Name</label><input type="text" id="lv-hol-name" placeholder="e.g. Republic Day"></div>
+          <div class="form-row"><label><input type="checkbox" id="lv-hol-optional"> Optional / restricted holiday</label></div>
+          <div class="form-row"><label>Notes</label><input type="text" id="lv-hol-desc"></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeHolidayModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitHoliday()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Leave type modal -->
+    <div class="modal-backdrop hidden" id="lv-type-modal">
+      <div class="modal" style="max-width:500px;">
+        <div class="modal-head">
+          <h3 id="lv-type-title">Add Leave Type</h3>
+          <button class="close" onclick="closeLeaveTypeModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lv-type-alert" class="alert hidden"></div>
+          <input type="hidden" id="lv-type-id">
+          <div class="form-grid cols-2">
+            <div class="form-row"><label>Code</label><input type="text" id="lv-type-code" placeholder="e.g. CL" maxlength="10"></div>
+            <div class="form-row"><label>Name</label><input type="text" id="lv-type-name" placeholder="Casual Leave"></div>
+            <div class="form-row"><label>Default annual quota</label><input type="number" step="0.5" id="lv-type-quota" value="0"></div>
+            <div class="form-row"><label>Colour</label><input type="color" id="lv-type-color" value="#3b82f6"></div>
+            <div class="form-row"><label><input type="checkbox" id="lv-type-paid" checked> Paid leave</label></div>
+            <div class="form-row"><label><input type="checkbox" id="lv-type-carry"> Allow carry-forward</label></div>
+            <div class="form-row"><label>Max carry-forward</label><input type="number" step="0.5" id="lv-type-maxcarry" value="0"></div>
+            <div class="form-row full"><label>Day count method <span style="font-size:10px;color:var(--muted);font-weight:400;">(maternity uses calendar days per the Act)</span></label>
+              <select id="lv-type-count-method">
+                <option value="working_days">Working days (skip weekends + holidays)</option>
+                <option value="calendar_days">Calendar days (count every day — use for Maternity)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeLeaveTypeModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitLeaveType()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manual leave entry modal (admin records leave on behalf of an employee) -->
+    <div class="modal-backdrop hidden" id="lv-manual-modal">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-head">
+          <h3>Manual Leave Entry</h3>
+          <button class="close" onclick="closeManualLeaveModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lv-manual-alert" class="alert hidden"></div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Record a leave for an employee who didn't apply themselves. Past-dated entries are allowed.</p>
+          <div class="form-row"><label>Employee</label>
+            <select id="lv-manual-user"></select>
+          </div>
+          <div class="form-row"><label>Leave type</label>
+            <select id="lv-manual-type"></select>
+          </div>
+          <div class="form-grid cols-2">
+            <div class="form-row"><label>From</label><input type="date" id="lv-manual-from" onchange="updateManualLeaveDays()"></div>
+            <div class="form-row"><label>To</label><input type="date" id="lv-manual-to" onchange="updateManualLeaveDays()"></div>
+          </div>
+          <div class="form-row"><label>Session</label>
+            <select id="lv-manual-session" onchange="updateManualLeaveDays()">
+              <option value="full">Full day(s)</option>
+              <option value="first_half">First half only (single day)</option>
+              <option value="second_half">Second half only (single day)</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Reason</label>
+            <textarea id="lv-manual-reason" rows="2" placeholder="e.g. Sick — informed reporting partner"></textarea>
+          </div>
+          <div class="form-row"><label>Admin note (optional)</label>
+            <input type="text" id="lv-manual-note" placeholder="e.g. Entered on behalf of employee">
+          </div>
+          <div class="form-row"><label><input type="checkbox" id="lv-manual-approve" checked> Mark as approved immediately</label>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Check to auto-approve (most common — recording a past leave). Uncheck to file as pending and route through normal approval.</div>
+          </div>
+          <div style="background:#f8fafc;padding:10px 12px;border-radius:6px;font-size:13px;margin-top:6px;">
+            Working days to deduct: <strong id="lv-manual-days">—</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">For working_days types weekends and holidays are skipped automatically.</div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeManualLeaveModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitManualLeave()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Decision modal (approve/reject with note) -->
+    <div class="modal-backdrop hidden" id="lv-decide-modal">
+      <div class="modal" style="max-width:460px;">
+        <div class="modal-head">
+          <h3 id="lv-decide-title">Decide</h3>
+          <button class="close" onclick="closeDecideModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="lv-decide-alert" class="alert hidden"></div>
+          <div id="lv-decide-summary" style="background:#f8fafc;padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
+          <div class="form-row"><label>Note (optional)</label><textarea id="lv-decide-note" rows="2" placeholder="Reason / comment"></textarea></div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeDecideModal()">Cancel</button>
+          <button class="btn btn-accent" id="lv-decide-confirm">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════ MASTERS ══════ -->
     <section id="tab-masters" class="tab-panel">
-      <h1 class="page-title">Masters</h1>
-      <div class="tabs">
-        <button class="active" data-mtab="m-users">Users</button>
-        <button data-mtab="m-clients">Clients</button>
-        <button data-mtab="m-matters">Matters</button>
-        <button data-mtab="m-rates">Rate cards</button>
+      <div class="tabs subtabs">
+        <button class="subtab-btn active" data-mtab="m-users">Users</button>
+        <button class="subtab-btn" data-mtab="m-clients">Clients</button>
+        <button class="subtab-btn" data-mtab="m-matters">Matters</button>
+        <button class="subtab-btn" data-mtab="m-rates">Rate cards</button>
       </div>
-
-      <div id="m-users" class="tab-panel active">
+      <div id="m-users" class="subtab-panel active">
         <div class="card">
-          <h3 class="card-title">Users <span class="actions"><button class="btn btn-sm btn-accent" onclick="newUser()">+ New user</button></span></h3>
+          <div class="card-title">Users <span class="actions"><button class="btn btn-sm btn-accent" onclick="newUser()">+ New user</button></span></div>
           <div id="users-table" class="table-wrap"></div>
         </div>
       </div>
-
-      <div id="m-clients" class="tab-panel">
+      <div id="m-clients" class="subtab-panel">
         <div class="card">
-          <h3 class="card-title">Clients <span class="actions"><button class="btn btn-sm btn-accent" onclick="newClient()">+ New client</button></span></h3>
+          <div class="card-title">Clients <span class="actions"><button class="btn btn-sm btn-accent" onclick="newClient()">+ New client</button></span></div>
           <div id="clients-table" class="table-wrap"></div>
         </div>
       </div>
-
-      <div id="m-matters" class="tab-panel">
+      <div id="m-matters" class="subtab-panel">
         <div class="card">
-          <h3 class="card-title">Matters <span class="actions"><button class="btn btn-sm btn-accent" onclick="newMatter()">+ New matter</button></span></h3>
+          <div class="card-title">Matters <span class="actions"><button class="btn btn-sm btn-accent" onclick="newMatter()">+ New matter</button></span></div>
           <div id="matters-table" class="table-wrap"></div>
         </div>
       </div>
-
-      <div id="m-rates" class="tab-panel">
+      <div id="m-rates" class="subtab-panel">
         <div class="card">
-          <h3 class="card-title">Per-matter rate overrides
+          <div class="card-title">Per-matter rate overrides
             <span class="actions"><button class="btn btn-sm btn-accent" onclick="newRate()">+ Add rate</button></span>
-          </h3>
-          <p class="card-subtitle">Set a custom hourly rate for an associate on a specific matter. If no row is set, the associate's default rate (or the matter rate, depending on billing type) is used.</p>
+          </div>
+          <p class="card-subtitle">Custom hourly rate for an associate on a specific matter. Falls back to associate's default if no override set.</p>
           <div id="rates-table" class="table-wrap"></div>
         </div>
       </div>
     </section>
+
   </main>
 
-  <script src="/js/common.js"></script>
-  <script src="/js/admin.js"></script>
+  <!-- Manual WFH entry modal -->
+  <div class="modal-backdrop hidden" id="wfh-manual-modal">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-head">
+        <h3>Manual WFH Entry</h3>
+        <button class="close" onclick="closeManualWfhModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="wm-alert" class="alert hidden"></div>
+        <div class="form-row"><label>Employee</label><select id="wm-user"></select></div>
+        <div class="form-grid cols-2">
+          <div class="form-row"><label>From</label><input type="date" id="wm-from"></div>
+          <div class="form-row"><label>To</label><input type="date" id="wm-to"></div>
+        </div>
+        <div class="form-row"><label>Reason</label><textarea id="wm-reason" rows="2" placeholder="Reason for WFH (recorded)"></textarea></div>
+        <div class="form-row"><label><input type="checkbox" id="wm-auto-approve" checked> Mark as approved immediately</label></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeManualWfhModal()">Cancel</button>
+        <button class="btn btn-accent" onclick="submitManualWfh()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WFH Decide (approve/reject) modal -->
+  <div class="modal-backdrop hidden" id="wfh-decide-modal">
+    <div class="modal" style="max-width:460px;">
+      <div class="modal-head">
+        <h3 id="wfh-decide-title">Decide</h3>
+        <button class="close" onclick="closeWfhDecideModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="wfh-decide-alert" class="alert hidden"></div>
+        <div id="wfh-decide-summary" style="background:#f8fafc;padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;"></div>
+        <div class="form-row"><label>Note (optional)</label><textarea id="wfh-decide-note" rows="2" placeholder="Reason / comment"></textarea></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeWfhDecideModal()">Cancel</button>
+        <button class="btn btn-accent" id="wfh-decide-confirm">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════ SUPER ADMIN ══════ -->
+  <section id="tab-superadmin" class="tab-panel">
+    <div class="subtabs">
+      <button class="subtab-btn active" data-stab="stab-sa-recycle">🗑️ Recycle Bin</button>
+      <button class="subtab-btn" data-stab="stab-sa-roles">👥 Roles & Users</button>
+      <button class="subtab-btn" data-stab="stab-sa-security">🔒 Security</button>
+      <button class="subtab-btn" data-stab="stab-sa-system">🔧 System</button>
+    </div>
+
+    <!-- Recycle Bin -->
+    <div id="stab-sa-recycle" class="subtab-panel active">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          Recycle Bin
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadRecycleBin()">↻ Refresh</button></span>
+        </div>
+        <p class="card-subtitle">Soft-deleted items — restore anytime. Forever retention (no auto-purge).</p>
+        <div class="kpi-grid-2" id="rb-summary"></div>
+        <h3 style="margin-top:18px;font-size:13px;color:var(--muted);">Users</h3>
+        <div id="rb-users" class="table-wrap"></div>
+        <h3 style="margin-top:18px;font-size:13px;color:var(--muted);">Clients</h3>
+        <div id="rb-clients" class="table-wrap"></div>
+        <h3 style="margin-top:18px;font-size:13px;color:var(--muted);">Matters</h3>
+        <div id="rb-matters" class="table-wrap"></div>
+        <h3 style="margin-top:18px;font-size:13px;color:var(--muted);">Invoices</h3>
+        <div id="rb-invoices" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- Roles & Users -->
+    <div id="stab-sa-roles" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          Roles
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadRolesTable()">↻ Refresh</button></span>
+        </div>
+        <p class="card-subtitle">System roles cannot be deleted. Edit role permissions (matrix UI coming soon).</p>
+        <div id="sa-roles-table" class="table-wrap"></div>
+      </div>
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          Users — assign role / force-reset password / impersonate
+        </div>
+        <div id="sa-users-table" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- Security sub-tab: Login History / Active Sessions / Locked Accounts -->
+    <div id="stab-sa-security" class="subtab-panel">
+      <!-- Login History -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          🕐 Login History
+          <span class="actions">
+            <input type="text" id="sec-login-email" placeholder="Filter by email..." style="font-size:12px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;width:200px;margin-right:8px;">
+            <button class="btn btn-sm btn-ghost" onclick="loadLoginHistory()">↻ Refresh</button>
+          </span>
+        </div>
+        <p class="card-subtitle">Last 200 login attempts — success & failure with IP address and timestamp.</p>
+        <div id="sa-login-history" class="table-wrap" style="max-height:420px;overflow-y:auto;"></div>
+      </div>
+
+      <!-- Active Sessions -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          🟢 Active Sessions
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadActiveSessions()">↻ Refresh</button></span>
+        </div>
+        <p class="card-subtitle">Currently active JWT sessions. Revoke any session to force-logout a user immediately.</p>
+        <div id="sa-active-sessions" class="table-wrap"></div>
+      </div>
+
+      <!-- Locked Accounts -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          🔐 Locked Accounts
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadLockedAccounts()">↻ Refresh</button></span>
+        </div>
+        <p class="card-subtitle">Accounts locked due to 5+ failed login attempts. Unlock manually or wait for auto-unlock (15 min).</p>
+        <div id="sa-locked-accounts" class="table-wrap"></div>
+      </div>
+
+      <!-- Security Summary -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">🛡️ Security Posture</div>
+        <div id="sa-security-posture" class="kpi-grid-2"></div>
+      </div>
+    </div>
+
+    <!-- System sub-tab: Backup / Storage / Scan -->
+    <div id="stab-sa-system" class="subtab-panel">
+      <!-- Backup card -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          💾 Backup &amp; Integrity
+          <span class="actions">
+            <button class="btn btn-sm btn-accent" onclick="runBackupNow(this)">▶ Backup Now</button>
+            <button class="btn btn-sm btn-ghost"  onclick="loadBackupList()">↻ Refresh</button>
+          </span>
+        </div>
+        <p class="card-subtitle">Hourly snapshots (24-snapshot rolling) + Daily backup at 11 AM. Each backup is integrity-verified (PRAGMA integrity_check + FK check + row counts).</p>
+        <div id="sa-integrity-status" style="margin:10px 0;"></div>
+        <div id="sa-backup-result" style="margin:8px 0;"></div>
+        <h3 style="margin-top:14px;font-size:13px;color:var(--muted);">Daily backups (last 15)</h3>
+        <div id="sa-backup-list" class="table-wrap"></div>
+        <h3 style="margin-top:14px;font-size:13px;color:var(--muted);">Hourly snapshots (last 24, rolling)</h3>
+        <div id="sa-hourly-list" class="table-wrap"></div>
+      </div>
+
+      <!-- Storage card -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          📊 Storage
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="loadStorageStats()">↻ Refresh</button></span>
+        </div>
+        <p class="card-subtitle">Disk usage breakdown by component. Keep an eye on uploads/logs growth.</p>
+        <div id="sa-storage" class="kpi-grid-2"></div>
+        <div id="sa-storage-paths" style="margin-top:14px;font-size:12px;color:var(--muted);"></div>
+      </div>
+
+      <!-- Scan card -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          🔍 System Scan
+          <span class="actions"><button class="btn btn-sm btn-accent" onclick="runSystemScan(this)">▶ Run Scan</button></span>
+        </div>
+        <p class="card-subtitle">DB integrity check + foreign-key validation + orphan record detection + backup freshness. Run this before issuing important invoices or on weekly maintenance.</p>
+        <div id="sa-scan-result"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Force-reset modal -->
+  <div class="modal-backdrop hidden" id="sa-reset-modal">
+    <div class="modal" style="max-width:480px;">
+      <div class="modal-head">
+        <h3>Force Reset Password</h3>
+        <button class="close" onclick="closeForceResetModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="sa-reset-alert" class="alert hidden"></div>
+        <p style="font-size:13px;margin-bottom:10px;">User: <strong id="sa-reset-user">—</strong></p>
+        <div class="form-row"><label>New password <span style="font-size:10px;color:var(--muted);font-weight:400;">(leave blank to auto-generate)</span></label>
+          <input type="text" id="sa-reset-pw" placeholder="auto-generate" minlength="8">
+        </div>
+        <div id="sa-reset-result" style="margin-top:10px;display:none;background:#dcfce7;border:1px solid #16a34a;padding:10px 12px;border-radius:6px;font-size:13px;">
+          <strong>Temp password:</strong> <code id="sa-reset-pw-out" style="background:#fff;padding:2px 6px;border-radius:4px;font-size:14px;"></code>
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ Share this securely with the user. Ask them to log in and change it immediately.</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn btn-ghost" onclick="closeForceResetModal()">Close</button>
+        <button class="btn btn-accent" id="sa-reset-submit-btn" onclick="submitForceReset()">Reset Password</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════ ACTIVITY LOG ══════ -->
+  <section id="tab-activity" class="tab-panel">
+    <div class="card" style="margin:14px;">
+      <div class="card-title">
+        Activity Log
+        <span class="actions">
+          <select id="act-filter-user" onchange="loadActivityLog()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
+            <option value="">All users</option>
+          </select>
+          <button class="btn btn-sm btn-ghost" onclick="loadActivityLog()">↻ Refresh</button>
+        </span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">All actions performed by billing and admin users. Billing actions trigger email notifications to admins.</p>
+      <div id="activity-table" class="table-wrap"></div>
+    </div>
+  </section>
+
+  <!-- ══════ EDIT DRAFT INVOICE MODAL ══════ -->
+  <div id="edit-draft-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;overflow-y:auto;">
+    <div style="background:var(--surface);max-width:860px;margin:40px auto;border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);overflow:hidden;">
+      <div style="padding:18px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <strong style="font-size:15px;">✏️ Edit Draft Invoice — <span id="ed-inv-no-display"></span></strong>
+        <button class="btn btn-sm btn-ghost" onclick="closeDraftEditor()">✕ Close</button>
+      </div>
+      <div style="padding:20px 24px;">
+        <div id="ed-alert" class="alert hidden" style="margin-bottom:12px;"></div>
+        <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr 1.5fr;gap:12px;margin-bottom:16px;">
+          <div>
+            <label class="form-label">Invoice No. <span style="color:var(--muted);font-weight:400;font-size:11px;">(editable while draft)</span></label>
+            <input class="form-control" type="text" id="ed-inv-no" placeholder="e.g. AP/2026/0042">
+          </div>
+          <div>
+            <label class="form-label">Invoice Date</label>
+            <input class="form-control" type="date" id="ed-date">
+          </div>
+          <div>
+            <label class="form-label">Due Date</label>
+            <input class="form-control" type="date" id="ed-due">
+          </div>
+          <div>
+            <label class="form-label">Notes</label>
+            <input class="form-control" type="text" id="ed-notes" placeholder="Optional notes">
+          </div>
+        </div>
+
+        <!-- Review workflow tracking — only meaningful while this is a draft -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:12px;margin-bottom:16px;padding:12px;background:#fafbfc;border:1px solid var(--border);border-radius:var(--radius);">
+          <div>
+            <label class="form-label">Review stage</label>
+            <select class="form-control" id="ed-review-stage">
+              <option value="">— Not set —</option>
+              <option value="drafting">🟡 Drafting</option>
+              <option value="sent_for_review">📤 Sent for Review</option>
+              <option value="revisions_pending">✏ Revisions Pending</option>
+              <option value="ready_to_issue">✅ Ready to Issue</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Assigned to (reviewer)</label>
+            <select class="form-control" id="ed-review-assignee">
+              <option value="">— Anyone —</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Review note <span style="color:var(--muted);font-weight:normal;">(e.g. "Printed and handed to RKM")</span></label>
+            <input class="form-control" type="text" id="ed-review-notes" placeholder="What's the status?">
+          </div>
+        </div>
+        <div id="ed-review-history" style="margin-bottom:14px;font-size:12px;color:var(--muted);"></div>
+
+        <div class="table-wrap" style="margin-bottom:12px;">
+          <table class="data" style="width:100%;">
+            <thead>
+              <tr>
+                <th style="width:38%">Description</th>
+                <th style="width:8%;text-align:center;">Qty</th>
+                <th style="width:9%;text-align:center;">Unit</th>
+                <th style="width:14%;text-align:right;">Rate</th>
+                <th style="width:14%;text-align:right;">Amount</th>
+                <th style="width:6%;text-align:center;"></th>
+              </tr>
+            </thead>
+            <tbody id="ed-items-body"></tbody>
+          </table>
+        </div>
+
+        <button class="btn btn-sm btn-ghost" onclick="edAddRow()" style="margin-bottom:16px;">+ Add line</button>
+
+        <div style="display:flex;justify-content:flex-end;">
+          <table style="font-size:13px;min-width:260px;border-collapse:collapse;">
+            <tr>
+              <td style="padding:4px 12px 4px 0;color:var(--muted);">Value of Services (before tax)</td>
+              <td style="text-align:right;font-weight:600;" id="ed-subtotal">0.00</td>
+            </tr>
+            <tr id="ed-tax-row" style="display:none;">
+              <td style="padding:4px 12px 4px 0;color:var(--muted);" id="ed-tax-label">GST (Reverse Charge)</td>
+              <td style="text-align:right;color:var(--muted);" id="ed-tax-amt">0.00</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 12px 0 0;font-weight:700;border-top:1px solid var(--border-strong);">Total Payable to Firm</td>
+              <td style="text-align:right;font-weight:700;border-top:1px solid var(--border-strong);" id="ed-total">0.00</td>
+            </tr>
+          </table>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
+          <button class="btn btn-ghost" onclick="closeDraftEditor()">Cancel</button>
+          <button class="btn btn-warning" onclick="saveDraftEdits()" style="margin-left:auto;">💾 Save Draft</button>
+          <button class="btn btn-accent" onclick="issueDraftInvoice()">✅ Issue Invoice</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
+  <script src="/js/common.js?v=20260520-scanfix2"></script>
+  <script src="/js/admin.js?v=20260520-scanfix2"></script>
 </body>
 </html>

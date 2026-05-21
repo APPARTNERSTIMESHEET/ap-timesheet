@@ -50,4 +50,35 @@ router.get('/by-user', authRequired, adminOnly, (req, res) => {
   res.json({ rows });
 });
 
+
+
+// ─── Matter profitability ─────────────────────────────────────────────────────
+router.get('/profitability', authRequired, adminOnly, (req, res) => {
+  const { from, to, client_id } = req.query;
+  const conds = ["te.status IN ('approved','invoiced')"];
+  const params = [];
+  if (from) { conds.push('te.entry_date >= ?'); params.push(from); }
+  if (to)   { conds.push('te.entry_date <= ?'); params.push(to); }
+  if (client_id) { conds.push('te.client_id = ?'); params.push(client_id); }
+  const where = `WHERE ${conds.join(' AND ')}`;
+
+  const rows = db.prepare(`
+    SELECT
+      c.name  AS client_name,
+      m.title AS matter_title,
+      m.file_no,
+      COALESCE(SUM(te.hours), 0) AS hours,
+      COALESCE(SUM(ii.amount), 0) AS billed_amount
+    FROM timesheet_entries te
+    JOIN clients c ON c.id = te.client_id
+    JOIN matters m ON m.id = te.matter_id
+    LEFT JOIN invoice_items ii ON ii.matter_id = m.id
+    ${where}
+    GROUP BY te.client_id, te.matter_id
+    ORDER BY billed_amount DESC
+  `).all(...params);
+
+  res.json({ rows });
+});
+
 module.exports = router;

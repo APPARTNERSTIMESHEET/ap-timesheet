@@ -4,58 +4,284 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AP & Partners — Timesheet</title>
-  <link rel="stylesheet" href="/css/styles.css">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231f2a44'/%3E%3Ctext x='32' y='42' font-family='Helvetica' font-size='24' font-weight='700' text-anchor='middle' fill='%23b08d57'%3EA%26P%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --navy:  #1c2e42;
+      --gold:  #b08d57;
+      --border: #e2dbd0;
+    }
+
+    html, body {
+      height: 100%;
+      font-family: 'Inter', -apple-system, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: #f5f2ee;
+    }
+
+    /* ── PAGE SHELL ── */
+    .shell {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 20px;
+    }
+
+    /* ── CARD ── */
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow:
+        0 1px 2px rgba(28,46,66,.04),
+        0 4px 16px rgba(28,46,66,.08),
+        0 24px 48px rgba(28,46,66,.06);
+      width: 100%;
+      max-width: 420px;
+      overflow: hidden;
+    }
+
+    /* Top gold bar */
+    .card-bar {
+      height: 3px;
+      background: linear-gradient(90deg, #8a6a3a, var(--gold), #c8a96e, var(--gold), #8a6a3a);
+    }
+
+    .card-body {
+      padding: 44px 44px 40px;
+    }
+
+    /* ── BRAND ── */
+    .brand-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 36px;
+    }
+    .brand-logo {
+      height: 80px;
+      width: auto;
+      max-width: 200px;
+      object-fit: contain;
+      margin-bottom: 16px;
+    }
+    .brand-name {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--navy);
+      letter-spacing: .3px;
+      margin-bottom: 4px;
+    }
+    .brand-sub {
+      font-size: 9.5px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--gold);
+      font-weight: 600;
+    }
+
+    /* ── DIVIDER ── */
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .divider-line {
+      flex: 1;
+      height: 1px;
+      background: var(--border);
+    }
+    .divider-text {
+      font-size: 10px;
+      color: #a09080;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    /* ── FORM ── */
+    .form-group {
+      margin-bottom: 18px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #8a9aaa;
+      margin-bottom: 7px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px 15px;
+      font-size: 14px;
+      font-family: 'Inter', sans-serif;
+      background: #fafaf8;
+      border: 1.5px solid var(--border);
+      border-radius: 7px;
+      color: var(--navy);
+      outline: none;
+      transition: border-color .15s, background .15s, box-shadow .15s;
+    }
+    .form-group input:hover:not(:focus) { border-color: #c8b090; }
+    .form-group input:focus {
+      background: #fff;
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(176,141,87,.10);
+    }
+    .form-group input::placeholder { color: #bbb5ac; }
+
+    /* Alert */
+    .alert {
+      padding: 11px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      margin-bottom: 18px;
+      border-left: 3px solid #c0392b;
+      background: #fdf2f2;
+      color: #8b1a1a;
+    }
+    .alert.hidden { display: none; }
+
+    /* Button */
+    .btn-submit {
+      width: 100%;
+      padding: 13px;
+      margin-top: 6px;
+      font-family: 'Inter', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      background: var(--navy);
+      color: #fff;
+      border: none;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background .15s, transform .12s, box-shadow .15s;
+      box-shadow: 0 2px 8px rgba(28,46,66,.20);
+    }
+    .btn-submit:hover:not(:disabled) {
+      background: #243447;
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(28,46,66,.28);
+    }
+    .btn-submit:active { transform: none; }
+    .btn-submit:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+    /* ── FOOTER ── */
+    .card-footer {
+      padding: 14px 44px 18px;
+      border-top: 1px solid #f0ece6;
+      display: flex;
+      justify-content: center;
+    }
+    .card-footer a {
+      font-size: 11px;
+      color: #a09080;
+      text-decoration: none;
+      letter-spacing: .3px;
+      transition: color .12s;
+    }
+    .card-footer a:hover { color: var(--gold); }
+
+    /* ── PAGE FOOTER ── */
+    .page-footer {
+      margin-top: 24px;
+      font-size: 10.5px;
+      color: #b0a898;
+      text-align: center;
+      letter-spacing: .3px;
+    }
+
+    @media (max-width: 480px) {
+      .card-body { padding: 36px 28px 32px; }
+      .card-footer { padding: 14px 28px 18px; }
+    }
+  </style>
 </head>
 <body>
-  <div class="login-shell">
-    <div class="login-card">
-      <div class="brand">
-        <img class="brand-logo brand-logo-lg" src="/img/logo.png" alt="AP & Partners" onerror="this.style.display='none'">
-        <div class="brand-text"><strong>AP &amp; Partners</strong><small>Advocates &amp; Solicitors</small></div>
+  <div class="shell">
+
+    <div class="card">
+      <div class="card-bar"></div>
+      <div class="card-body">
+
+        <!-- Brand -->
+        <div class="brand-block">
+          <img class="brand-logo" src="/img/logo.png" alt="AP & Partners"
+               onerror="this.style.display='none'">
+          <div class="brand-name">AP &amp; Partners</div>
+          <div class="brand-sub">Advocates</div>
+        </div>
+
+        <!-- Divider -->
+        <div class="divider">
+          <div class="divider-line"></div>
+          <div class="divider-text">Sign in to continue</div>
+          <div class="divider-line"></div>
+        </div>
+
+        <!-- Alert -->
+        <div id="alert" class="alert hidden"></div>
+
+        <!-- Form -->
+        <form id="login-form" autocomplete="on">
+          <div class="form-group">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" required
+                   autocomplete="username" placeholder="you@appartners.in">
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" required
+                   autocomplete="current-password" placeholder="••••••••">
+          </div>
+          <button class="btn-submit" type="submit" id="login-btn">Sign in</button>
+        </form>
+
       </div>
-      <h2>Timesheet &amp; Billing — Sign in</h2>
-      <div id="alert" class="alert hidden"></div>
-      <form id="login-form">
-        <div class="form-row">
-          <label for="email">Email</label>
-          <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@appartners.in">
-        </div>
-        <div class="form-row">
-          <label for="password">Password</label>
-          <input id="password" name="password" type="password" required autocomplete="current-password" placeholder="••••••••">
-        </div>
-        <button class="btn btn-accent" type="submit" id="login-btn">Sign in</button>
-      </form>
-      <div class="login-footer">
-        First-time admin: <code>it@appartners.in / Admin@123</code><br>
-        Change immediately after first login.
+
+      <div class="card-footer">
+        <a href="https://www.appartners.in" target="_blank">www.appartners.in</a>
       </div>
     </div>
+
+    <div class="page-footer">Timesheet &amp; Billing &nbsp;·&nbsp; Internal Use Only</div>
+
   </div>
 
   <script src="/js/common.js"></script>
   <script>
-    // If already signed in, route to the right page
     (function () {
       const u = Auth.user();
       if (Auth.token() && u) {
-        location.href = u.role === 'admin' ? '/admin' : '/associate';
+        location.href = ['admin','billing'].includes(u.role) ? '/admin' : '/associate';
       }
     })();
 
+    const ADMIN_PANEL_ROLES = ['admin', 'billing'];
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = document.getElementById('email').value.trim();
+      const email    = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
-      const btn = document.getElementById('login-btn');
-      btn.disabled = true; btn.textContent = 'Signing in...';
+      const btn      = document.getElementById('login-btn');
+      btn.disabled = true; btn.textContent = 'Signing in…';
       try {
         const res = await api('/api/auth/login', { method: 'POST', body: { email, password } });
         Auth.setSession(res.token, res.user);
-        location.href = res.user.role === 'admin' ? '/admin' : '/associate';
-      } catch (e) {
-        showAlert('alert', e.message);
+        location.href = ADMIN_PANEL_ROLES.includes(res.user.role) ? '/admin' : '/associate';
+      } catch (err) {
+        showAlert('alert', err.message);
       } finally {
         btn.disabled = false; btn.textContent = 'Sign in';
       }

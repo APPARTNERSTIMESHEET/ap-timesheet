@@ -31,12 +31,13 @@ router.post('/timesheet/bulk-approve', authRequired, adminOnly, (req, res) => {
   const ids = (req.body && req.body.ids) || [];
   if (!Array.isArray(ids) || !ids.length) return res.status(400).json({ error: 'ids[] required' });
   const stmt = db.prepare(`
-    UPDATE timesheet_entries SET status='approved', approved_by=?, approved_at=datetime('now')
+    UPDATE timesheet_entries SET status='approved', approved_by=?, approved_at=datetime('now'), rejection_note=NULL
      WHERE id = ? AND status IN ('submitted','draft','rejected')
   `);
-  const tx = db.transaction((arr) => arr.forEach(id => stmt.run(req.user.id, id)));
-  tx(ids);
-  res.json({ ok: true, count: ids.length });
+  // Sum the rows actually changed so the caller knows how many were already approved/invoiced
+  const tx = db.transaction((arr) => arr.reduce((n, id) => n + stmt.run(req.user.id, id).changes, 0));
+  const approved = tx(ids);
+  res.json({ ok: true, requested: ids.length, approved, skipped: ids.length - approved });
 });
 
 router.get('/dashboard', authRequired, adminOnly, (_req, res) => {

@@ -38,7 +38,7 @@ function hoursFromTimes(start, end) {
 // GET entries (own; admin can pass user_id=any or all)
 router.get('/', authRequired, (req, res) => {
   const { from, to, user_id, client_id, matter_id, status } = req.query;
-  const isAdmin = req.user.role === 'admin';
+  const isAdmin = ['admin','billing'].includes(req.user.role);
   const conds = [];
   const params = [];
   if (!isAdmin) { conds.push('t.user_id = ?'); params.push(req.user.id); }
@@ -75,7 +75,7 @@ router.get('/:id', authRequired, (req, res) => {
     JOIN matters m ON m.id = t.matter_id
     WHERE t.id = ?`).get(id);
   if (!row) return res.status(404).json({ error: 'Entry not found' });
-  if (req.user.role !== 'admin' && row.user_id !== req.user.id) {
+  if (!['admin','billing'].includes(req.user.role) && row.user_id !== req.user.id) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   const attachments = db.prepare('SELECT id, original_name, mimetype, size_bytes FROM attachments WHERE entry_id = ?').all(id);
@@ -85,12 +85,21 @@ router.get('/:id', authRequired, (req, res) => {
 // Create entry (with optional attachment as field "file")
 router.post('/', authRequired, upload.single('file'), (req, res) => {
   const b = req.body || {};
-  // Accept admin passing user_id, otherwise self
-  const userId = (req.user.role === 'admin' && b.user_id) ? parseInt(b.user_id, 10) : req.user.id;
+  // Admin/billing may pass an explicit user_id, otherwise the entry belongs to the caller
+  const userId = (['admin','billing'].includes(req.user.role) && b.user_id) ? parseInt(b.user_id, 10) : req.user.id;
 
   let hours = b.hours ? parseFloat(b.hours) : hoursFromTimes(b.start_time, b.end_time);
-  if (!b.entry_date || !b.client_id || !b.matter_id || !b.activity_type || !b.description || !hours) {
-    return res.status(400).json({ error: 'entry_date, client_id, matter_id, activity_type, description and hours/start+end required' });
+  if (!b.entry_date || !b.client_id || !b.matter_id || !b.activity_type || !b.description) {
+    return res.status(400).json({ error: 'entry_date, client_id, matter_id, activity_type and description are required' });
+  }
+  if (hours == null || Number.isNaN(hours) || hours <= 0) {
+    return res.status(400).json({ error: 'hours (or start_time + end_time) must be a positive number' });
+  }
+  // Validate matter belongs to the chosen client (prevents cross-client matter assignment)
+  const matterRow = db.prepare('SELECT client_id FROM matters WHERE id = ?').get(b.matter_id);
+  if (!matterRow) return res.status(400).json({ error: 'Matter not found' });
+  if (Number(matterRow.client_id) !== Number(b.client_id)) {
+    return res.status(400).json({ error: 'Matter does not belong to the selected client' });
   }
   const status = (b.status === 'draft' ? 'draft' : 'submitted');
   const isBillable = (b.is_billable === undefined || b.is_billable === null)
@@ -122,15 +131,16 @@ router.patch('/:id', authRequired, upload.single('file'), (req, res) => {
   const id = parseInt(req.params.id, 10);
   const entry = db.prepare('SELECT * FROM timesheet_entries WHERE id = ?').get(id);
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
-  const isAdmin = req.user.role === 'admin';
+  const isAdmin = ['admin','billing'].includes(req.user.role);
   if (!isAdmin && entry.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
-  if (!isAdmin && ['approved','invoiced'].includes(entry.status)) {
-    return res.status(400).json({ error: 'Entry locked (approved/invoiced) — contact admin' });
+  // Only invoiced entries are fully locked for non-admins; approved entries can still be edited
+  if (!isAdmin && entry.status === 'invoiced') {
+    return res.status(400).json({ error: 'Entry is already invoiced and cannot be edited' });
   }
 
   const b = req.body || {};
   const allowed = ['client_id','matter_id','entry_date','start_time','end_time','hours',
-                   'activity_type','description','notes','is_billable','status'];
+                   'activity_type','description','notes','is_billable','status','rate_override'];
   // recompute hours if start/end changed but hours not
   if ((b.start_time || b.end_time) && b.hours == null) {
     const s = b.start_time ?? entry.start_time;
@@ -143,6 +153,7 @@ router.patch('/:id', authRequired, upload.single('file'), (req, res) => {
     if (k in b) {
       let v = b[k];
       if (k === 'is_billable') v = (v === '0' || v === false || v === 'false') ? 0 : 1;
+      if (k === 'rate_override') v = (v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? null : parseFloat(v);
       fields.push(`${k} = ?`); values.push(v);
     }
   }
@@ -164,7 +175,7 @@ router.delete('/:id', authRequired, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const entry = db.prepare('SELECT * FROM timesheet_entries WHERE id = ?').get(id);
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
-  const isAdmin = req.user.role === 'admin';
+  const isAdmin = ['admin','billing'].includes(req.user.role);
   if (!isAdmin && entry.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
   if (!isAdmin && ['approved','invoiced'].includes(entry.status)) {
     return res.status(400).json({ error: 'Cannot delete approved/invoiced entry' });
@@ -183,7 +194,7 @@ router.get('/:id/attachment/:attId', authRequired, (req, res) => {
   const attId = parseInt(req.params.attId, 10);
   const entry = db.prepare('SELECT user_id FROM timesheet_entries WHERE id = ?').get(id);
   if (!entry) return res.status(404).json({ error: 'Not found' });
-  if (req.user.role !== 'admin' && entry.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
+  if (!['admin','billing'].includes(req.user.role) && entry.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
   const att = db.prepare('SELECT * FROM attachments WHERE id = ? AND entry_id = ?').get(attId, id);
   if (!att) return res.status(404).json({ error: 'Not found' });
   const filePath = path.join(UPLOAD_DIR, att.filename);
@@ -196,7 +207,7 @@ router.delete('/:id/attachment/:attId', authRequired, (req, res) => {
   const attId = parseInt(req.params.attId, 10);
   const entry = db.prepare('SELECT user_id, status FROM timesheet_entries WHERE id = ?').get(id);
   if (!entry) return res.status(404).json({ error: 'Not found' });
-  const isAdmin = req.user.role === 'admin';
+  const isAdmin = ['admin','billing'].includes(req.user.role);
   if (!isAdmin && entry.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden' });
   if (!isAdmin && ['approved','invoiced'].includes(entry.status)) {
     return res.status(400).json({ error: 'Entry is locked' });
