@@ -92,6 +92,15 @@ if (Get-Command rclone -ErrorAction SilentlyContinue) {
     Write-Host "  Skipped CloudSync (rclone not installed -- install from https://rclone.org/install/)" -ForegroundColor Yellow
 }
 
+# 3b. Daily secrets backup at 11:10 AM (right after daily DB backup, encrypted via DPAPI).
+# Backs up .env, Cloudflare tunnel creds, and PM2 config so disaster recovery
+# can fully restore without re-typing passwords or re-issuing certificates.
+Register-ApTask `
+    -Name 'SecretsBackup' `
+    -Description 'Daily encrypted backup of .env, Cloudflare tunnel creds, PM2 config' `
+    -Trigger (New-ScheduledTaskTrigger -Daily -At '11:10am') `
+    -Script  (Join-Path $AppRoot 'ops\backup-secrets.ps1')
+
 # 4. Weekly health check on Sundays 03:00
 $sun = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At '3:00am'
 Register-ApTask `
