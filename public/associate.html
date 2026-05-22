@@ -3,101 +3,161 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>My Timesheet — AP & Partners</title>
-  <link rel="stylesheet" href="/css/styles.css">
+  <title>Timesheet — AP &amp; Partners</title>
+  <link rel="stylesheet" href="/css/styles.css?v=20260519-topnav2">
 </head>
-<body>
-  <div id="topbar"></div>
-  <main>
-    <div id="alert" class="alert hidden"></div>
+<body class="associate-body">
 
-    <!-- New entry tab -->
-    <section id="tab-new" class="tab-panel active">
-      <h1 class="page-title">Log time</h1>
-      <div class="card">
-        <h3 class="card-title">New timesheet entry</h3>
-        <form id="entry-form" enctype="multipart/form-data">
-          <div class="form-grid cols-3">
-            <div class="form-row">
-              <label>Date</label>
-              <input type="date" name="entry_date" id="f-date" required>
-            </div>
-            <div class="form-row">
-              <label>Client</label>
-              <select name="client_id" id="f-client" required></select>
-            </div>
-            <div class="form-row">
-              <label>Matter / File No.</label>
-              <select name="matter_id" id="f-matter" required></select>
-            </div>
-            <div class="form-row">
-              <label>Activity type</label>
-              <select name="activity_type" id="f-activity" required>
-                <option value="drafting">Drafting</option>
-                <option value="court">Court appearance</option>
-                <option value="research">Research</option>
-                <option value="meeting">Meeting</option>
-                <option value="call">Call</option>
-                <option value="travel">Travel</option>
-                <option value="admin">Admin</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label>Start time</label>
-              <input type="time" name="start_time" id="f-start">
-            </div>
-            <div class="form-row">
-              <label>End time</label>
-              <input type="time" name="end_time" id="f-end">
-            </div>
-            <div class="form-row">
-              <label>Hours (auto from times, or enter manually)</label>
-              <input type="number" step="0.25" min="0" name="hours" id="f-hours" placeholder="e.g. 2.5">
-            </div>
-            <div class="form-row checkbox-row">
-              <input type="checkbox" id="f-billable" name="is_billable" checked>
-              <label for="f-billable" style="text-transform:none;font-size:13px;font-weight:500;color:var(--text);">Billable to client</label>
-            </div>
-            <div class="form-row">
-              <label>Submit as</label>
-              <select name="status" id="f-status">
-                <option value="submitted" selected>Submit for approval</option>
-                <option value="draft">Save as draft</option>
-              </select>
-            </div>
-            <div class="form-row full">
-              <label>Task description</label>
-              <input type="text" name="description" id="f-desc" placeholder="What did you work on?" required>
-            </div>
-            <div class="form-row full">
-              <label>Notes (optional)</label>
-              <textarea name="notes" id="f-notes" placeholder="Any additional context"></textarea>
-            </div>
-            <div class="form-row full">
-              <label>Attachment (optional)</label>
-              <input type="file" name="file" id="f-file">
-            </div>
-          </div>
-          <div style="margin-top:14px; display:flex; gap:8px;">
-            <button type="submit" class="btn btn-accent">Save entry</button>
-            <button type="reset" class="btn btn-ghost">Reset</button>
-          </div>
-        </form>
+  <!-- ── LEFT ICON SIDEBAR ─────────────────────────────────── -->
+  <nav class="as-sidebar">
+    <div class="as-sidebar-top">
+      <div class="as-sidebar-logo">
+        <img src="/img/logo.png" alt="AP" onerror="this.style.display='none'">
       </div>
-    </section>
+      <button class="as-nav-btn active" id="nav-ts" title="Timesheet" onclick="switchAssocTab('ts')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/>
+        </svg>
+      </button>
+      <button class="as-nav-btn" id="nav-summary" title="Monthly Summary" onclick="switchAssocTab('summary')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+        </svg>
+      </button>
+      <button class="as-nav-btn" id="nav-leaves" title="Leaves" onclick="switchAssocTab('leaves')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+          <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>
+        </svg>
+      </button>
+      <button class="as-nav-btn" id="nav-wfh" title="Work From Home" onclick="switchAssocTab('wfh')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+      </button>
+    </div>
+    <div class="as-sidebar-bottom">
+      <!-- Password change is disabled for associates — HR / admin handles
+           resets via the Super Admin panel (force-reset password) per firm policy. -->
+      <button class="as-nav-btn as-logout-btn" title="Logout" onclick="Auth.logout()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+      </button>
+    </div>
+  </nav>
 
-    <!-- My entries tab -->
-    <section id="tab-mine" class="tab-panel">
-      <h1 class="page-title">My timesheet</h1>
-      <div class="card">
-        <h3 class="card-title">
-          Filter
-          <span class="actions">
-            <button class="btn btn-sm" onclick="loadMyEntries()">Refresh</button>
-          </span>
-        </h3>
-        <div class="form-grid cols-4">
+  <!-- ── MAIN AREA ──────────────────────────────────────────── -->
+  <div class="as-main">
+
+    <!-- TOP HEADER -->
+    <header class="as-topbar">
+      <div class="as-topbar-brand">
+        <img src="/img/logo.png" alt="AP" onerror="this.style.display='none'">
+        <span class="as-topbar-name">AP &amp; Partners, Advocates</span>
+      </div>
+      <div class="as-topbar-right">
+        <span class="as-greeting">
+          <span id="as-greeting-word">Good morning,</span>
+          <strong id="as-username">&nbsp;</strong>
+        </span>
+        <button class="as-topbtn as-power-btn" onclick="Auth.logout()" title="Logout">&#9211;</button>
+      </div>
+    </header>
+
+    <div id="alert" class="alert hidden" style="margin:6px 14px 0;"></div>
+
+    <!-- ══ TIMESHEET PANEL ══ -->
+    <section id="as-tab-ts" class="as-panel active">
+
+      <!-- Week control bar -->
+      <div class="as-week-bar">
+        <div class="as-week-left">
+          <button class="as-week-nav-btn" onclick="prevWeek()">&#9664;&#9664;</button>
+          <div class="as-ts-heading">
+            <span class="as-ts-clock">&#9201;</span>
+            <span class="as-ts-title">Timesheet Input</span>
+          </div>
+          <button class="as-week-nav-btn" onclick="nextWeek()">&#9654;&#9654;</button>
+          <span class="as-week-range">Week :&nbsp;<strong id="week-label">Loading...</strong></span>
+        </div>
+        <div class="as-week-right">
+          <div class="as-stat-chip as-chip-teal">Actual Hrs :&nbsp;<strong id="stat-actual">00:00</strong></div>
+          <div class="as-stat-chip as-chip-red">Worked Hrs :&nbsp;<strong id="stat-worked">00:00</strong></div>
+          <div class="as-eff-block">
+            <svg class="as-eff-ring" viewBox="0 0 36 36">
+              <path class="as-eff-bg" d="M18 2.0845 a15.9155 15.9155 0 0 1 0 31.831 a15.9155 15.9155 0 0 1 0-31.831"/>
+              <path class="as-eff-fg" id="efficiency-arc" stroke-dasharray="0,100"
+                    d="M18 2.0845 a15.9155 15.9155 0 0 1 0 31.831 a15.9155 15.9155 0 0 1 0-31.831"/>
+              <text x="18" y="21" class="as-eff-pct" id="efficiency-text">0%</text>
+            </svg>
+            <span class="as-eff-label">Efficiency:</span>
+          </div>
+          <button class="as-cur-week-btn" onclick="goCurrentWeek()">&#128197; Current Week</button>
+          <button class="as-tutorial-btn">&#9654; Tutorial</button>
+        </div>
+      </div>
+
+      <!-- GRID WRAPPER -->
+      <div class="as-grid-outer">
+        <div class="as-grid-scroll">
+          <table class="as-week-table" id="week-grid-table">
+            <thead>
+              <tr>
+                <th class="as-col-client">Client</th>
+                <th class="as-col-project">Project</th>
+                <th class="as-col-act">Activity/Task</th>
+                <th class="as-col-day" id="th-0"><span class="th-day">Mon</span><span class="th-date"></span></th>
+                <th class="as-col-day" id="th-1"><span class="th-day">Tue</span><span class="th-date"></span></th>
+                <th class="as-col-day" id="th-2"><span class="th-day">Wed</span><span class="th-date"></span></th>
+                <th class="as-col-day" id="th-3"><span class="th-day">Thu</span><span class="th-date"></span></th>
+                <th class="as-col-day" id="th-4"><span class="th-day">Fri</span><span class="th-date"></span></th>
+                <th class="as-col-day as-col-wknd" id="th-5"><span class="th-day">Sat</span><span class="th-date"></span></th>
+                <th class="as-col-day as-col-wknd" id="th-6"><span class="th-day">Sun</span><span class="th-date"></span></th>
+              </tr>
+            </thead>
+            <tbody id="week-grid-body"></tbody>
+            <tfoot>
+              <tr class="as-total-row">
+                <td colspan="3" class="as-total-lbl">Day Total</td>
+                <td class="as-total-cell" id="day-total-0">00.00</td>
+                <td class="as-total-cell" id="day-total-1">00.00</td>
+                <td class="as-total-cell" id="day-total-2">00.00</td>
+                <td class="as-total-cell" id="day-total-3">00.00</td>
+                <td class="as-total-cell" id="day-total-4">00.00</td>
+                <td class="as-total-cell as-col-wknd" id="day-total-5">00.00</td>
+                <td class="as-total-cell as-col-wknd" id="day-total-6">00.00</td>
+              </tr>
+              <tr class="as-avail-row">
+                <td colspan="3" class="as-total-lbl">Available Time / OT</td>
+                <td class="as-avail-cell" id="avail-0">00.00</td>
+                <td class="as-avail-cell" id="avail-1">00.00</td>
+                <td class="as-avail-cell" id="avail-2">00.00</td>
+                <td class="as-avail-cell" id="avail-3">00.00</td>
+                <td class="as-avail-cell" id="avail-4">00.00</td>
+                <td class="as-avail-cell as-col-wknd" id="avail-5">00.00</td>
+                <td class="as-avail-cell as-col-wknd" id="avail-6">00.00</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div class="as-add-row">
+          <button class="as-add-row-btn" onclick="addEmptyRow()">+ Add Row</button>
+        </div>
+      </div>
+
+      <!-- ACTION BAR -->
+      <div class="as-action-bar">
+        <button class="as-save-btn" onclick="saveWeek('draft')">&#128190; Save</button>
+        <button class="as-submit-btn" onclick="saveWeek('submitted')">&#10003; Submit for approval</button>
+      </div>
+
+      <!-- HISTORY TABLE -->
+      <div class="as-history-card">
+        <div class="as-history-filters">
           <div class="form-row"><label>From</label><input type="date" id="ff-from"></div>
           <div class="form-row"><label>To</label><input type="date" id="ff-to"></div>
           <div class="form-row"><label>Status</label>
@@ -112,27 +172,200 @@
           </div>
           <div class="form-row" style="align-items:flex-end;">
             <button class="btn" onclick="loadMyEntries()">Apply</button>
+            <button class="btn btn-ghost" style="margin-left:6px;" onclick="loadMyEntries()">&#8635; Refresh</button>
           </div>
         </div>
-      </div>
-      <div class="card">
-        <h3 class="card-title">Entries</h3>
-        <div id="my-entries-table" class="table-wrap"></div>
+        <div class="table-wrap" id="my-entries-table"></div>
       </div>
     </section>
 
-    <!-- Monthly summary -->
-    <section id="tab-month" class="tab-panel">
-      <h1 class="page-title">Monthly summary</h1>
-      <div class="kpi-grid" id="month-kpis"></div>
-      <div class="card">
-        <h3 class="card-title">Hours by client this month</h3>
+    <!-- ══ LEAVES PANEL ══ -->
+    <section id="as-tab-leaves" class="as-panel">
+      <div style="padding:14px;">
+        <!-- Balance cards -->
+        <div class="card">
+          <div class="card-title">
+            My Leave Balance
+            <span class="actions">
+              <select id="lv-year" onchange="loadMyLeaves()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);"></select>
+              <button class="btn btn-sm btn-accent" onclick="openApplyLeaveModal()">+ Apply Leave</button>
+            </span>
+          </div>
+          <div id="lv-balances" class="kpi-grid" style="margin-top:8px;"></div>
+        </div>
+
+        <!-- My applications -->
+        <div class="card" style="margin-top:14px;">
+          <div class="card-title">
+            My Applications
+            <span class="actions">
+              <select id="lv-filter-status" onchange="loadMyApplications()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
+                <option value="">All</option>
+                <option value="submitted">Pending approval</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <button class="btn btn-sm btn-ghost" onclick="loadMyApplications()">↻ Refresh</button>
+            </span>
+          </div>
+          <div id="lv-apps-table" class="table-wrap"></div>
+        </div>
+
+        <!-- Upcoming holidays -->
+        <div class="card" style="margin-top:14px;">
+          <div class="card-title">Holiday Calendar</div>
+          <div id="lv-holidays-table" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Apply Leave Modal -->
+    <div class="modal-backdrop hidden" id="apply-leave-modal">
+      <div class="modal" style="max-width:520px;">
+        <div class="modal-head">
+          <h3>Apply for Leave</h3>
+          <button class="close" onclick="closeApplyLeaveModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="al-alert" class="alert hidden"></div>
+          <div class="form-row"><label>Leave type</label>
+            <select id="al-type"></select>
+          </div>
+          <div class="form-grid cols-2">
+            <div class="form-row"><label>From</label><input type="date" id="al-from" onchange="updateLeaveDays()"></div>
+            <div class="form-row"><label>To</label><input type="date" id="al-to" onchange="updateLeaveDays()"></div>
+          </div>
+          <div class="form-row"><label>Session</label>
+            <select id="al-session" onchange="updateLeaveDays()">
+              <option value="full">Full day(s)</option>
+              <option value="first_half">First half only (single day)</option>
+              <option value="second_half">Second half only (single day)</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Reason</label>
+            <textarea id="al-reason" rows="3" placeholder="Brief reason..."></textarea>
+          </div>
+          <div class="form-row"><label>Contact during leave (optional)</label>
+            <input type="text" id="al-contact" placeholder="Phone / alt email">
+          </div>
+          <div style="background:#f8fafc;padding:10px 12px;border-radius:6px;font-size:13px;margin-top:6px;">
+            Working days requested: <strong id="al-days">—</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Weekends and holidays are skipped automatically.</div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeApplyLeaveModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitLeaveApplication()">Submit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ WFH PANEL ══ -->
+    <section id="as-tab-wfh" class="as-panel">
+      <div style="padding:14px;">
+        <div class="card">
+          <div class="card-title">
+            My Work From Home
+            <span class="actions">
+              <button class="btn btn-sm btn-accent" onclick="openApplyWfhModal()">+ Apply for WFH</button>
+            </span>
+          </div>
+          <p class="card-subtitle">Apply in advance for working from home. Approval is required from admin / HR / billing per the HR policy.</p>
+          <div id="wfh-summary" class="kpi-grid" style="margin-top:8px;"></div>
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+          <div class="card-title">
+            My Applications
+            <span class="actions">
+              <select id="wfh-filter-status" onchange="loadMyWfh()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
+                <option value="">All</option>
+                <option value="submitted">Pending approval</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="cancelled">Cancelled</option>
+              </select>
+              <button class="btn btn-sm btn-ghost" onclick="loadMyWfh()">↻ Refresh</button>
+            </span>
+          </div>
+          <div id="wfh-apps-table" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Apply WFH modal -->
+    <div class="modal-backdrop hidden" id="apply-wfh-modal">
+      <div class="modal" style="max-width:520px;">
+        <div class="modal-head">
+          <h3>Apply for Work From Home</h3>
+          <button class="close" onclick="closeApplyWfhModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="aw-alert" class="alert hidden"></div>
+          <div class="form-grid cols-2">
+            <div class="form-row"><label>From</label><input type="date" id="aw-from" onchange="updateWfhDays()"></div>
+            <div class="form-row"><label>To</label><input type="date" id="aw-to" onchange="updateWfhDays()"></div>
+          </div>
+          <div class="form-row"><label>Reason</label>
+            <textarea id="aw-reason" rows="3" placeholder="Brief reason (e.g. doctor visit nearby, family commitment, focused work)..."></textarea>
+          </div>
+          <div class="form-row"><label>Contact during WFH (optional)</label>
+            <input type="text" id="aw-contact" placeholder="Phone / alt email">
+          </div>
+          <div style="background:#f8fafc;padding:10px 12px;border-radius:6px;font-size:13px;margin-top:6px;">
+            Working days requested: <strong id="aw-days">—</strong>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px;">Weekends and holidays are skipped automatically (you're already off then).</div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-ghost" onclick="closeApplyWfhModal()">Cancel</button>
+          <button class="btn btn-accent" onclick="submitWfhApplication()">Submit for Approval</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ MONTHLY SUMMARY PANEL ══ -->
+    <section id="as-tab-summary" class="as-panel">
+      <div class="kpi-grid" id="month-kpis" style="padding:16px;"></div>
+      <div class="card" style="margin:0 14px 14px;">
+        <div class="card-title">Hours by client this month</div>
         <div id="month-table" class="table-wrap"></div>
       </div>
     </section>
-  </main>
 
-  <script src="/js/common.js"></script>
-  <script src="/js/associate.js"></script>
+  </div><!-- .as-main -->
+
+  <!-- ── CONTEXT MENU (shared) ────────────────────────────── -->
+  <div class="as-ctx-menu" id="as-ctx-menu">
+    <div class="as-ctx-item" id="ctx-narr-item" onclick="openNarrPopup()">
+      <span>&#128196;</span> Narration
+    </div>
+    <div class="as-ctx-item" id="ctx-exp-item" onclick="openExpPopup()">
+      <span>&#8377;</span> Expense
+    </div>
+    <div class="as-ctx-item" onclick="toggleCtxBillable()">
+      <input type="checkbox" id="ctx-bill-chk" onclick="event.stopPropagation()"> Billable
+    </div>
+  </div>
+
+  <!-- ── NARRATION POPUP ──────────────────────────────────── -->
+  <div class="as-popup-overlay" id="as-narr-overlay" onclick="if(event.target===this)closeNarrPopup()">
+    <div class="as-popup-box">
+      <div class="as-popup-head">
+        <strong>Narration</strong> <small id="narr-cell-label" style="color:var(--muted)"></small>
+        <button class="close" onclick="closeNarrPopup()">&#10005;</button>
+      </div>
+      <textarea id="narr-text" rows="3" placeholder="Enter narration..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:var(--radius);font-size:13px;resize:vertical;"></textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+        <button class="btn btn-ghost btn-sm" onclick="closeNarrPopup()">Cancel</button>
+        <button class="btn btn-sm" onclick="saveNarrPopup()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
+  <script src="/js/common.js?v=20260518-nopwchg"></script>
+  <script src="/js/associate.js?v=20260518-nopwchg"></script>
 </body>
 </html>

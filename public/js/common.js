@@ -16,9 +16,12 @@ const Auth = {
   requireAuth(role) {
     const u = this.user();
     if (!this.token() || !u) { window.location.href = '/'; return null; }
-    if (role && u.role !== role) {
-      window.location.href = u.role === 'admin' ? '/admin' : '/associate';
-      return null;
+    if (role) {
+      const allowed = Array.isArray(role) ? role : [role];
+      if (!allowed.includes(u.role)) {
+        window.location.href = ['admin','billing'].includes(u.role) ? '/admin' : '/associate';
+        return null;
+      }
     }
     return u;
   }
@@ -83,9 +86,8 @@ function renderTopBar(activeTab) {
     { id: 'tab-reports',   label: 'Reports' },
     { id: 'tab-masters',   label: 'Masters' }
   ] : [
-    { id: 'tab-mine',  label: 'My Timesheet' },
-    { id: 'tab-new',   label: 'New Entry' },
-    { id: 'tab-month', label: 'Monthly Summary' }
+    { id: 'tab-timesheet', label: 'Timesheet' },
+    { id: 'tab-month',     label: 'Monthly Summary' }
   ];
   return `
     <div class="topbar">
@@ -98,7 +100,6 @@ function renderTopBar(activeTab) {
       </div>
       <div class="userbox">
         <span>${escapeHtml(u.full_name)} <span class="muted">· ${escapeHtml(u.designation || u.role)}</span></span>
-        <button onclick="changePasswordModal()">Password</button>
         <button onclick="Auth.logout()">Logout</button>
       </div>
     </div>`;
