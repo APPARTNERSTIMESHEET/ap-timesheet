@@ -3,6 +3,8 @@ const { db } = require('../utils/db');
 const { authRequired, adminOnly, notifyAdminsOfBillingAction } = require('../middleware/auth');
 const { buildInvoicePreview, createInvoice } = require('../utils/billing');
 const { streamInvoicePDF } = require('../utils/invoice-pdf');
+const { generateLEDES1998B, generateLEDES1998BI, generateLEDESXML21 } = require('../utils/ledes-export');
+const { writeAuditLog } = require('../middleware/auth');
 const path = require('path');
 
 const router = express.Router();
@@ -684,6 +686,144 @@ router.get('/activity', authRequired, adminOnly, (req, res) => {
   const total = db.prepare(`SELECT COUNT(*) as cnt FROM audit_log a ${where}`).get(...params);
 
   res.json({ log: rows, total: total.cnt });
+});
+
+// ─── LEDES Export ────────────────────────────────────────────────────────────
+// Exports an invoice in LEDES format for upload to a corporate client's
+// e-billing platform (Tymetrix 360, LegalTracker, Passport, etc.).
+//
+// Query parameter:  ?format=1998B | 1998BI | XML-2.1  (default 1998BI)
+//
+// Returns the file as a download with appropriate Content-Type. Every export
+// is logged to ledes_exports and the audit_log for compliance traceability.
+router.get('/invoices/:id/export-ledes', authRequired, (req, res) => {
+  const invoiceId = parseInt(req.params.id, 10);
+  const format = (req.query.format || '1998BI').toUpperCase();
+
+  // Permission: billing role or admin/super_admin
+  const role = req.user.role_code || req.user.role;
+  if (!['admin', 'super_admin', 'billing'].includes(role)) {
+    return res.status(403).json({ error: 'LEDES export requires billing/admin permission' });
+  }
+
+  // Verify invoice exists
+  const inv = db.prepare('SELECT id, invoice_no, total, currency FROM invoices WHERE id = ?').get(invoiceId);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+
+  let content, ext, mime;
+  try {
+    switch (format) {
+      case '1998B':
+        content = generateLEDES1998B(invoiceId);
+        ext = 'txt'; mime = 'text/plain';
+        break;
+      case '1998BI':
+      case 'INTERNATIONAL':
+        content = generateLEDES1998BI(invoiceId);
+        ext = 'txt'; mime = 'text/plain';
+        break;
+      case 'XML-2.1':
+      case 'XML':
+        content = generateLEDESXML21(invoiceId);
+        ext = 'xml'; mime = 'application/xml';
+        break;
+      default:
+        return res.status(400).json({ error: `Unsupported LEDES format: ${format}. Use 1998B, 1998BI, or XML-2.1` });
+    }
+  } catch (e) {
+    console.error('[LEDES] export failed:', e);
+    return res.status(500).json({ error: 'LEDES generation failed: ' + e.message });
+  }
+
+  // Audit
+  const lineItemCount = db.prepare('SELECT COUNT(*) AS c FROM invoice_items WHERE invoice_id = ?').get(invoiceId).c;
+  const filename = `LEDES-${inv.invoice_no.replace(/[^A-Za-z0-9_-]/g, '_')}-${format}.${ext}`;
+
+  try {
+    db.prepare(`
+      INSERT INTO ledes_exports
+        (invoice_id, format_version, filename, line_item_count, total_amount, currency, exported_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(invoiceId, format, filename, lineItemCount, inv.total, inv.currency || 'INR', req.user.id);
+  } catch (e) { /* non-fatal */ }
+
+  writeAuditLog(req, 'LEDES_EXPORT', 'invoice', invoiceId,
+    `Format=${format}, lines=${lineItemCount}, total=${inv.currency || 'INR'} ${inv.total}`);
+
+  res.setHeader('Content-Type', mime + '; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('X-LEDES-Format', format);
+  res.send(content);
+});
+
+// ─── LEDES Export History ────────────────────────────────────────────────────
+// Returns the export history for an invoice so the UI can show which formats
+// have been exported when (audit trail for the billing team).
+router.get('/invoices/:id/ledes-history', authRequired, (req, res) => {
+  const role = req.user.role_code || req.user.role;
+  if (!['admin', 'super_admin', 'billing'].includes(role)) {
+    return res.status(403).json({ error: 'Admin/billing only' });
+  }
+  const rows = db.prepare(`
+    SELECT le.*, u.full_name AS exported_by_name
+    FROM ledes_exports le
+    LEFT JOIN users u ON u.id = le.exported_by
+    WHERE le.invoice_id = ?
+    ORDER BY le.exported_at DESC
+  `).all(parseInt(req.params.id, 10));
+  res.json({ history: rows });
+});
+
+// ─── UTBMS Code Lists (for admin UI dropdowns) ──────────────────────────────
+router.get('/utbms/task-codes', authRequired, (req, res) => {
+  const rows = db.prepare('SELECT * FROM utbms_task_codes WHERE is_active = 1 ORDER BY code').all();
+  res.json({ codes: rows });
+});
+router.get('/utbms/activity-codes', authRequired, (req, res) => {
+  const rows = db.prepare('SELECT * FROM utbms_activity_codes WHERE is_active = 1 ORDER BY code').all();
+  res.json({ codes: rows });
+});
+router.get('/utbms/expense-codes', authRequired, (req, res) => {
+  const rows = db.prepare('SELECT * FROM utbms_expense_codes WHERE is_active = 1 ORDER BY code').all();
+  res.json({ codes: rows });
+});
+
+// ─── Activity → UTBMS Mapping CRUD (admin only) ──────────────────────────────
+router.get('/utbms/mappings', authRequired, adminOnly, (req, res) => {
+  const rows = db.prepare(`
+    SELECT m.*, c.name AS client_name
+    FROM activity_utbms_mapping m
+    LEFT JOIN clients c ON c.id = m.client_id
+    ORDER BY (m.client_id IS NOT NULL), c.name, m.activity_type
+  `).all();
+  res.json({ mappings: rows });
+});
+
+router.put('/utbms/mappings', authRequired, adminOnly, (req, res) => {
+  const { activity_type, task_code, activity_code, client_id } = req.body || {};
+  if (!activity_type) return res.status(400).json({ error: 'activity_type required' });
+
+  // Validate codes exist (if provided)
+  if (task_code) {
+    const t = db.prepare('SELECT 1 FROM utbms_task_codes WHERE code = ?').get(task_code);
+    if (!t) return res.status(400).json({ error: `Unknown UTBMS task code: ${task_code}` });
+  }
+  if (activity_code) {
+    const a = db.prepare('SELECT 1 FROM utbms_activity_codes WHERE code = ?').get(activity_code);
+    if (!a) return res.status(400).json({ error: `Unknown UTBMS activity code: ${activity_code}` });
+  }
+
+  // Upsert: replace existing mapping for (activity_type, client_id) tuple
+  db.prepare('DELETE FROM activity_utbms_mapping WHERE activity_type = ? AND IFNULL(client_id,0) = IFNULL(?,0)')
+    .run(activity_type, client_id || null);
+  db.prepare(`
+    INSERT INTO activity_utbms_mapping (activity_type, task_code, activity_code, client_id)
+    VALUES (?, ?, ?, ?)
+  `).run(activity_type, task_code || null, activity_code || null, client_id || null);
+
+  writeAuditLog(req, 'UTBMS_MAPPING_UPDATE', 'mapping', null,
+    `${activity_type} -> task=${task_code || '-'} activity=${activity_code || '-'} client_id=${client_id || 'global'}`);
+  res.json({ ok: true });
 });
 
 module.exports = router;

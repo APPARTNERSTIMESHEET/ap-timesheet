@@ -309,6 +309,59 @@ CREATE TABLE IF NOT EXISTS active_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_sess_user   ON active_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sess_hash   ON active_sessions(token_hash);
+
+-- ─── LEDES: Legal Electronic Data Exchange Standard ─────────────────────────
+-- International e-billing format required by Fortune 500 corporate clients
+-- and their e-billing platforms (Tymetrix 360, LegalTracker, Passport, etc.).
+-- See https://ledes.org
+
+-- UTBMS Task Codes (L100-L800 Litigation, C100-C800 Counseling, etc.)
+CREATE TABLE IF NOT EXISTS utbms_task_codes (
+  code        TEXT PRIMARY KEY,         -- e.g. L120, C100
+  category    TEXT NOT NULL,            -- Litigation, Counseling, Project, Bankruptcy
+  description TEXT NOT NULL,
+  is_active   INTEGER NOT NULL DEFAULT 1
+);
+
+-- UTBMS Activity Codes (A101-A111 — how the work was performed)
+CREATE TABLE IF NOT EXISTS utbms_activity_codes (
+  code        TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  is_active   INTEGER NOT NULL DEFAULT 1
+);
+
+-- UTBMS Expense Codes (E101-E124 — types of disbursements)
+CREATE TABLE IF NOT EXISTS utbms_expense_codes (
+  code        TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  is_active   INTEGER NOT NULL DEFAULT 1
+);
+
+-- Per-firm mapping of internal activity_type to UTBMS task + activity codes.
+-- client_id NULL = global default; non-NULL = per-client override.
+CREATE TABLE IF NOT EXISTS activity_utbms_mapping (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  activity_type TEXT NOT NULL,           -- our internal: drafting, court, research, meeting, call, review, other
+  task_code     TEXT REFERENCES utbms_task_codes(code),
+  activity_code TEXT REFERENCES utbms_activity_codes(code),
+  client_id     INTEGER REFERENCES clients(id),  -- NULL = global default
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(activity_type, client_id)
+);
+
+-- Audit log of every LEDES export -- proves what was sent to which client when.
+CREATE TABLE IF NOT EXISTS ledes_exports (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_id      INTEGER NOT NULL REFERENCES invoices(id),
+  format_version  TEXT NOT NULL,        -- '1998B', '1998BI', 'XML-2.0', 'XML-2.1'
+  filename        TEXT,
+  line_item_count INTEGER,
+  total_amount    REAL,
+  currency        TEXT,
+  exported_by     INTEGER REFERENCES users(id),
+  exported_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ledes_invoice ON ledes_exports(invoice_id);
 `;
 
 function ensureSchema() {
@@ -375,6 +428,26 @@ function ensureSchema() {
     "ALTER TABLE users ADD COLUMN last_login_ip TEXT",
     "ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN locked_until TEXT",   // NULL = not locked; ISO datetime = locked until
+
+    // ── LEDES: International e-billing support ───────────────────────────
+    // Timekeeper classification per LEDES standard: PARTNER, SENIOR_ASSOCIATE,
+    // ASSOCIATE, OF_COUNSEL, PARALEGAL, LAW_CLERK, OTHER. Required by client
+    // e-billing platforms to validate rates against pre-approved schedules.
+    "ALTER TABLE users ADD COLUMN timekeeper_classification TEXT",
+
+    // Client's own internal ID for the firm (e.g., 'APPARTNERS-IN-001').
+    // Required in CLIENT_ID field of LEDES output.
+    "ALTER TABLE clients ADD COLUMN client_internal_id TEXT",
+
+    // Whether this client requires LEDES e-billing for invoices.
+    "ALTER TABLE clients ADD COLUMN requires_ledes INTEGER NOT NULL DEFAULT 0",
+
+    // Preferred LEDES format per client (1998B, 1998BI, XML-2.0, XML-2.1).
+    "ALTER TABLE clients ADD COLUMN ledes_format TEXT",
+
+    // Client's matter ID (their internal code, different from our file_no).
+    // Required by LEDES CLIENT_MATTER_ID field for cross-system reconciliation.
+    "ALTER TABLE matters ADD COLUMN client_matter_id TEXT",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column already exists — skip */ }
@@ -414,6 +487,13 @@ function ensureSchema() {
     require('./seed-rbac').seedRBAC();
   } catch (e) {
     console.error('[init] RBAC seed failed:', e.message);
+  }
+
+  // LEDES: seed UTBMS codes + default activity_type mappings.
+  try {
+    require('./seed-utbms').seedUTBMS();
+  } catch (e) {
+    console.error('[init] UTBMS seed failed:', e.message);
   }
 }
 

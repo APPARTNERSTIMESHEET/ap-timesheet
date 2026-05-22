@@ -1103,6 +1103,7 @@
                  <button class="btn btn-sm btn-accent" onclick="issueDraftFromList(${i.id})">✅ Issue</button>
                  <button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})">Cancel</button>`
               : `<button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})">PDF</button>
+                 <button class="btn btn-sm btn-ghost" onclick="exportLEDES(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Export in LEDES format for corporate e-billing platforms (Tymetrix, LegalTracker, etc.)">📤 LEDES</button>
                  <button class="btn btn-sm btn-ghost" onclick="emailInvoice(${i.id},'${escapeHtml(i.client_name)}')">📧 Email</button>
                  ${(i.status==='issued'||isOverdue) ? `<button class="btn btn-sm btn-success" onclick="markPaid(${i.id})">✓ Paid</button>` : ''}
                  ${i.status==='issued' ? `<button class="btn btn-sm btn-ghost" onclick="reviseInvoice(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Cancel this invoice and start a new draft with the same items">🔁 Revise</button>` : ''}
@@ -1116,6 +1117,88 @@
   window.downloadInvoicePDF = function(id) {
     const token = Auth.token();
     window.open('/api/billing/invoices/'+id+'/pdf?token='+encodeURIComponent(token), '_blank');
+  };
+
+  // ─── LEDES Export ─────────────────────────────────────────────────────────
+  // Shows a modal asking for the LEDES format, then downloads the file. The
+  // format choice depends on what the client's e-billing platform accepts —
+  // most accept 1998BI (international, includes currency). XML 2.1 is preferred
+  // by modern platforms (Tymetrix 360, LegalTracker).
+  window.exportLEDES = function(invoiceId, invoiceNo) {
+    const modal = document.createElement('div');
+    modal.className = 'modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
+    // Override .btn defaults by using a custom class with !important + plain divs.
+    // Earlier version used <button class="btn"> which inherited the app's dark
+    // navy background, making text invisible. Now we use clickable <div>s with
+    // explicit white backgrounds and dark text for guaranteed readability.
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:560px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <h3 style="margin:0 0 10px;font-family:Georgia,serif;color:#1E2761;font-size:20px;">📤 Export LEDES — ${escapeHtml(invoiceNo)}</h3>
+        <p style="font-size:13px;color:#64748b;margin:0 0 18px;line-height:1.5;">
+          Choose the LEDES format that matches your client's e-billing platform requirements.
+        </p>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+
+          <div class="ledes-fmt-card" data-fmt="1998BI" style="cursor:pointer;padding:14px 16px;border:2px solid #C9A961;background:#FEF9E7 !important;border-radius:8px;transition:all 0.15s;">
+            <div style="font-weight:700;color:#1E2761 !important;font-size:15px;">
+              LEDES 1998BI
+              <span style="display:inline-block;font-size:10px;background:#16A34A;color:#FFFFFF;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;letter-spacing:0.5px;">RECOMMENDED</span>
+            </div>
+            <div style="font-size:12px;color:#64748B !important;margin-top:6px;line-height:1.5;">
+              International format with currency support. Most widely accepted by corporate e-billing platforms (~80% coverage).
+            </div>
+          </div>
+
+          <div class="ledes-fmt-card" data-fmt="XML-2.1" style="cursor:pointer;padding:14px 16px;border:1px solid #E2E8F0;background:#FFFFFF !important;border-radius:8px;transition:all 0.15s;">
+            <div style="font-weight:700;color:#1E2761 !important;font-size:15px;">LEDES XML 2.1</div>
+            <div style="font-size:12px;color:#64748B !important;margin-top:6px;line-height:1.5;">
+              Modern XML format with structured data. Preferred by Tymetrix 360, LegalTracker, and Brightflag.
+            </div>
+          </div>
+
+          <div class="ledes-fmt-card" data-fmt="1998B" style="cursor:pointer;padding:14px 16px;border:1px solid #E2E8F0;background:#FFFFFF !important;border-radius:8px;transition:all 0.15s;">
+            <div style="font-weight:700;color:#1E2761 !important;font-size:15px;">LEDES 1998B</div>
+            <div style="font-size:12px;color:#64748B !important;margin-top:6px;line-height:1.5;">
+              Original US-only format. Use only if client specifically requests this version.
+            </div>
+          </div>
+
+        </div>
+        <div style="text-align:right;margin-top:18px;">
+          <button id="ledes-cancel" style="padding:8px 18px;background:#F1F5F9;color:#1E2761;border:1px solid #CBD5E1;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    // Hover effect via JS (since we don't have CSS file editing here)
+    modal.querySelectorAll('.ledes-fmt-card').forEach(card => {
+      card.addEventListener('mouseenter', () => {
+        card.style.borderColor = '#C9A961';
+        card.style.transform = 'translateY(-1px)';
+        card.style.boxShadow = '0 2px 8px rgba(201,169,97,0.2)';
+      });
+      card.addEventListener('mouseleave', () => {
+        if (card.dataset.fmt !== '1998BI') card.style.borderColor = '#E2E8F0';
+        card.style.transform = 'none';
+        card.style.boxShadow = 'none';
+      });
+    });
+
+    const close = () => modal.remove();
+    modal.querySelector('#ledes-cancel').onclick = close;
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    modal.querySelectorAll('.ledes-fmt-card').forEach(card => {
+      card.onclick = () => {
+        const fmt = card.dataset.fmt;
+        const token = Auth.token();
+        const url = `/api/billing/invoices/${invoiceId}/export-ledes?format=${encodeURIComponent(fmt)}&token=${encodeURIComponent(token)}`;
+        window.open(url, '_blank');
+        close();
+        showAlert('alert', `LEDES ${fmt} exported — check your downloads folder.`, 'success');
+      };
+    });
   };
 
   window.markPaid = async function(id) {
