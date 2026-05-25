@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "AP Time Manager",
+    "slug": "ap-time-manager",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "in.appartners.timemanager",
+      "infoPlist": {
+        "NSCalendarsUsageDescription": "To schedule reminders and tasks",
+        "UIBackgroundModes": ["fetch", "remote-notification"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "in.appartners.timemanager",
+      "permissions": [
+        "CALL_PHONE",
+        "SCHEDULE_EXACT_ALARM",
+        "USE_EXACT_ALARM",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#6c63ff",
+          "sounds": []
+        }
+      ]
+    ]
+  }
+}
