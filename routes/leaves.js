@@ -17,7 +17,12 @@ const router = express.Router();
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 function isAdminLike(user) {
-  return user && ['admin', 'billing'].includes(user.role);
+  if (!user) return false;
+  // Check both new role_code and legacy role text. super_admin / hr inherit
+  // admin-like leave-management privileges. This is intentionally broad so
+  // super_admin gets god-mode (cancel anyone's leave, view all applications).
+  const code = user.role_code || user.role;
+  return ['admin', 'billing', 'super_admin', 'hr'].includes(code);
 }
 
 function todayISO() { return new Date().toISOString().slice(0, 10); }

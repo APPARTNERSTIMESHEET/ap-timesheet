@@ -2,14 +2,57 @@
  * Admin page logic — topbar, dashboard, timesheets, billing, outstanding, reports, masters.
  */
 (function () {
-  const me = Auth.requireAuth(['admin', 'billing']); if (!me) return;
+  // Admin page accessible by: admin, billing, super_admin, hr, partner_view.
+  // Each role sees a different subset of tabs (filtered below).
+  const me = Auth.requireAuth(['admin', 'billing', 'super_admin', 'hr', 'partner_view']);
+  if (!me) return;
 
-  // ─── Render topbar with admin tabs (including Outstanding) ───────────
+  // Helper: which role does this user effectively have? Prefer role_code (new
+  // RBAC) over legacy role text, since HR users have legacy role='admin' but
+  // role_code='hr' (placeholder due to legacy CHECK constraint).
+  const effectiveRole = me.role_code || me.role;
+  const isHR          = effectiveRole === 'hr';
+  const isSuperAdmin  = effectiveRole === 'super_admin';
+  const isAdmin       = effectiveRole === 'admin' || isSuperAdmin;
+  const isBilling     = effectiveRole === 'billing';
+  const isPartnerView = effectiveRole === 'partner_view';
+
+  // Tab visibility matrix: which tabs each role can see in the topnav.
+  // HR sees only Leaves & WFH + Masters (employee management focus).
+  // Partner View sees read-only data (reports, dashboards).
+  // Billing sees billing-related tabs only.
+  // Admin / Super Admin see everything.
+  const tabsForRole = isHR
+    ? ['tab-leaves', 'tab-masters']
+    : isPartnerView
+      ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports']
+      : isBilling
+        ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-masters']
+        : ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-leaves', 'tab-masters'];
+
+  // Default landing tab: HR opens Leaves & WFH; everyone else opens Dashboard.
+  const defaultTab = isHR ? 'tab-leaves' : 'tab-dashboard';
+
+  // ─── Render topbar with admin tabs (filtered by role) ───────────
   const topbarEl = document.getElementById('topbar');
   if (topbarEl) {
-    // Build initials from full name for the user-avatar circle ("Mohd Amir" → "MA").
     const initials = String(me.full_name || me.email || '?')
       .split(/\s+/).map(s => s[0] || '').join('').slice(0, 2).toUpperCase() || '?';
+
+    // Build buttons only for tabs this role is allowed to see.
+    const tabDefs = [
+      { id: 'tab-dashboard',   label: 'Dashboard' },
+      { id: 'tab-entries',     label: 'Timesheets' },
+      { id: 'tab-billing',     label: 'Billing' },
+      { id: 'tab-outstanding', label: 'Outstanding' },
+      { id: 'tab-reports',     label: 'Reports' },
+      { id: 'tab-leaves',      label: 'Leaves &amp; WFH' },
+      { id: 'tab-masters',     label: 'Masters' },
+    ];
+    const visibleTabs = tabDefs.filter(t => tabsForRole.includes(t.id));
+    const tabButtons = visibleTabs.map(t =>
+      `<button data-tab="${t.id}" ${t.id === defaultTab ? 'class="active"' : ''}>${t.label}</button>`
+    ).join('');
 
     topbarEl.innerHTML = `
       <div class="topbar">
@@ -19,14 +62,8 @@
         </div>
         <div class="topnav-wrap">
           <div class="topnav">
-            <button data-tab="tab-dashboard" class="active">Dashboard</button>
-            <button data-tab="tab-entries">Timesheets</button>
-            <button data-tab="tab-billing">Billing</button>
-            <button data-tab="tab-outstanding">Outstanding</button>
-            <button data-tab="tab-reports">Reports</button>
-            <button data-tab="tab-leaves">Leaves &amp; WFH</button>
-            <button data-tab="tab-masters">Masters</button>
-            ${me.role === 'admin' || me.role === 'super_admin' ? '<button data-tab="tab-activity">Activity Log</button>' : ''}
+            ${tabButtons}
+            ${isAdmin ? '<button data-tab="tab-activity">Activity Log</button>' : ''}
             <button data-tab="tab-superadmin" id="tab-superadmin-btn" class="icon-only" title="Super Admin" style="display:none;">🛡️</button>
           </div>
         </div>
@@ -35,6 +72,9 @@
             <span class="userbox-name">${escapeHtml(me.full_name)}</span>
             <span class="userbox-role">${escapeHtml(me.designation || me.role)}</span>
           </div>
+          <button onclick="openMyReminders()" title="My personal reminders" style="background:none;border:0;font-size:18px;cursor:pointer;padding:4px 8px;position:relative;">
+            🔔<span id="rem-badge" style="display:none;position:absolute;top:0;right:0;background:#dc2626;color:#fff;font-size:9px;font-weight:700;border-radius:8px;padding:1px 5px;min-width:14px;text-align:center;">0</span>
+          </button>
           <div class="userbox-avatar" title="${escapeHtml(me.email || '')}">${initials}</div>
           <button onclick="Auth.logout()">Logout</button>
         </div>
@@ -575,23 +615,28 @@
     });
     const taxRate = parseFloat(document.getElementById('bi-tax').value) || 0;
     const cur     = document.getElementById('bi-currency').value || 'INR';
-    // Discount: either flat ₹ or percent of pre-discount subtotal. Clamp to
-    // [0, sub] so we never produce a negative payable.
     const dType = document.getElementById('bi-disc-type')?.value || 'flat';
     const dInput = Math.max(0, parseFloat(document.getElementById('bi-disc-amt')?.value) || 0);
     const discAmt = dType === 'percent' ? sub * dInput / 100 : Math.min(dInput, sub);
     const netSub  = Math.max(0, sub - discAmt);
+
+    // Reverse-charge toggle decides whether tax is collected by the firm
+    // (added to total) or paid by client directly (shown informational only).
+    // Foreign currency invoices = always zero-rated (export of services).
+    const reverseChargeSel = document.getElementById('bi-reverse-charge');
+    const isReverseCharge  = reverseChargeSel ? (reverseChargeSel.value === 'yes') : true;
     const effectiveTax = (cur === 'INR') ? taxRate : 0;
     const taxAmt = netSub * (effectiveTax / 100);
+    // If reverse charge: firm collects only netSub; tax is informational.
+    // If NOT reverse charge: firm collects netSub + tax (normal forward billing).
+    const grandTotal = isReverseCharge ? netSub : (netSub + taxAmt);
 
     setText('bi-ed-sub',  fmtMoney(sub,    cur));
     setText('bi-ed-disc', fmtMoney(discAmt, cur));
     setText('bi-ed-net',  fmtMoney(netSub, cur));
     setText('bi-ed-tax',  fmtMoney(taxAmt, cur));
-    setText('bi-ed-tot',  fmtMoney(netSub, cur));    // reverse-charge: total = net subtotal
+    setText('bi-ed-tot',  fmtMoney(grandTotal, cur));
 
-    // Show/hide the discount + net-subtotal rows depending on whether a
-    // discount is actually applied.
     const discRow = document.getElementById('bi-ed-disc-row');
     const netRow  = document.getElementById('bi-ed-net-row');
     if (discRow) discRow.style.display = discAmt > 0 ? '' : 'none';
@@ -599,9 +644,13 @@
 
     const taxLabelEl = document.getElementById('bi-ed-tax-label');
     if (taxLabelEl) {
-      taxLabelEl.textContent = (cur === 'INR')
-        ? `GST @ ${taxRate}% (Reverse Charge — payable by client)`
-        : `Tax (export of services — 0%)`;
+      if (cur !== 'INR') {
+        taxLabelEl.textContent = `Tax (export of services — 0%)`;
+      } else if (isReverseCharge) {
+        taxLabelEl.textContent = `GST @ ${taxRate}% (Reverse Charge — payable by client directly)`;
+      } else {
+        taxLabelEl.textContent = `GST @ ${taxRate}% (collected by firm)`;
+      }
     }
   }
 
@@ -616,19 +665,47 @@
     wireBiEdInputs(); biEdRecalcTotals();
   };
 
+  // Wire up the inline edit-preview rows. Three editable inputs per row —
+  // qty, rate, amount — and they must stay mathematically consistent
+  // (amount = qty × rate). To support BOTH typical billing patterns:
+  //   (a) Lawyer fee:    user sets qty (hours) + rate → amount auto-calcs
+  //   (b) Fixed expense: user types amount directly → rate auto-syncs
+  // we do bidirectional sync. This was a real user complaint: previously
+  // typing into Amount got silently overwritten when qty/rate changed.
   function wireBiEdInputs() {
     document.querySelectorAll('#bi-ed-body tr').forEach(tr => {
-      ['.bi-ed-qty', '.bi-ed-rate'].forEach(sel => {
-        const el = tr.querySelector(sel);
+      const qtyEl  = tr.querySelector('.bi-ed-qty');
+      const rateEl = tr.querySelector('.bi-ed-rate');
+      const amtEl  = tr.querySelector('.bi-ed-amount');
+
+      // qty or rate change → recalc amount
+      [qtyEl, rateEl].forEach(el => {
         if (el && !el.dataset.wired) {
           el.dataset.wired = '1';
-          el.addEventListener('input', () => { biEdRecalcRow(tr); biEdRecalcTotals(); });
+          el.addEventListener('input', () => {
+            biEdRecalcRow(tr);
+            biEdRecalcTotals();
+          });
         }
       });
-      const amt = tr.querySelector('.bi-ed-amount');
-      if (amt && !amt.dataset.wired) {
-        amt.dataset.wired = '1';
-        amt.addEventListener('input', biEdRecalcTotals);
+
+      // amount change → sync rate to (amount / qty) so the data stays
+      // consistent and "amount stays where the user typed it".
+      if (amtEl && !amtEl.dataset.wired) {
+        amtEl.dataset.wired = '1';
+        amtEl.addEventListener('input', () => {
+          const amtVal = parseFloat(amtEl.value) || 0;
+          let qtyVal  = parseFloat(qtyEl.value)  || 0;
+          // If qty is zero, treat the line as a lump-sum: qty=1, rate=amount.
+          if (qtyVal === 0) {
+            qtyEl.value = '1.00';
+            qtyVal = 1;
+          }
+          // Sync rate so qty × rate == amount (avoids the previous bug where
+          // typing into amount got overwritten on next qty/rate change).
+          rateEl.value = (amtVal / qtyVal).toFixed(2);
+          biEdRecalcTotals();
+        });
       }
     });
   }
@@ -816,7 +893,8 @@
         items: editedItems || null,
         discount_amount: parseFloat(document.getElementById('bi-disc-amt')?.value) || 0,
         discount_type:   document.getElementById('bi-disc-type')?.value || 'flat',
-        discount_note:   (document.getElementById('bi-disc-note')?.value || '').trim() || null
+        discount_note:   (document.getElementById('bi-disc-note')?.value || '').trim() || null,
+        reverse_charge:  document.getElementById('bi-reverse-charge')?.value === 'yes' ? 1 : 0
       }});
       showAlert('alert', 'Invoice ' + out.invoice_no + ' created. Total: ' + fmtMoney(out.total), 'success');
       switchTab('tab-billing');
@@ -865,6 +943,7 @@
         discount_amount: parseFloat(document.getElementById('bi-disc-amt')?.value) || 0,
         discount_type:   document.getElementById('bi-disc-type')?.value || 'flat',
         discount_note:   (document.getElementById('bi-disc-note')?.value || '').trim() || null,
+        reverse_charge:  document.getElementById('bi-reverse-charge')?.value === 'yes' ? 1 : 0,
         save_as_draft: true
       }});
       showAlert('alert', '💾 Draft ' + out.invoice_no + ' saved. Open All Invoices to edit and issue it.', 'success');
@@ -940,20 +1019,33 @@
   window.miRecalc = function() {
     const cur = document.getElementById('mi-currency')?.value || 'INR';
     const taxRate = parseFloat(document.getElementById('mi-tax')?.value) || 0;
+    const rcSel = document.getElementById('mi-reverse-charge');
+    const isReverseCharge = rcSel ? (rcSel.value === 'yes') : true;
     let subtotal = 0;
     document.querySelectorAll('[id^="mi-amt-"]').forEach(el => {
       subtotal += parseFloat(el.textContent.replace(/[^0-9.]/g,'')) || 0;
     });
     subtotal = Math.round(subtotal * 100) / 100;
-    const taxAmt = Math.round(subtotal * (taxRate / 100) * 100) / 100;
-    // Reverse charge: total = service fee only. GST shown for information — NOT collected by firm.
-    const total = subtotal;
+    // Non-INR (export of services) → tax always 0
+    const effectiveTax = (cur === 'INR') ? taxRate : 0;
+    const taxAmt = Math.round(subtotal * (effectiveTax / 100) * 100) / 100;
+    // Reverse charge → total = service fee only (tax payable by client directly).
+    // Normal billing → total = subtotal + tax (firm collects).
+    const total = isReverseCharge ? subtotal : (subtotal + taxAmt);
     const fmt = n => n.toLocaleString('en-IN', { minimumFractionDigits:2, maximumFractionDigits:2 });
     const sub = document.getElementById('mi-subtotal'); if (sub) sub.textContent = fmt(subtotal);
     const tax = document.getElementById('mi-tax-amt'); if (tax) tax.textContent = fmt(taxAmt);
     const tot = document.getElementById('mi-total');   if (tot) tot.textContent = fmt(total);
     const taxLbl = document.getElementById('mi-tax-label');
-    if (taxLbl) taxLbl.textContent = `GST ${taxRate}% (Reverse Charge — payable by client)`;
+    if (taxLbl) {
+      if (cur !== 'INR') {
+        taxLbl.textContent = `Tax (export of services — 0%)`;
+      } else if (isReverseCharge) {
+        taxLbl.textContent = `GST @ ${taxRate}% (Reverse Charge — payable by client directly)`;
+      } else {
+        taxLbl.textContent = `GST @ ${taxRate}% (collected by firm)`;
+      }
+    }
     const taxRow = document.getElementById('mi-tax-row');
     if (taxRow) taxRow.style.display = taxRate > 0 ? '' : 'none';
   };
@@ -1007,7 +1099,8 @@
         tax_type: taxTypeVal === 'auto' ? null : taxTypeVal,
         firm_entity: document.getElementById('mi-firm-entity')?.value || 'delhi',
         notes:    document.getElementById('mi-notes').value,
-        items
+        items,
+        reverse_charge: document.getElementById('mi-reverse-charge')?.value === 'yes' ? 1 : 0
       }});
       showAlert('mi-alert', 'Invoice ' + out.invoice_no + ' created! Total: ' + fmtMoney(out.total, currency), 'success');
       // Clear rows
@@ -1060,15 +1153,38 @@
   };
 
   // Pre-populate mi-client when masters load (handled in loadMasters patch below)
+  // Cache last filtered list for CSV export
+  let LAST_INVOICES_FILTERED = [];
+
   window.loadInvoices = async function () {
     const status      = document.getElementById('inv-filter-status').value;
     const reviewStage = (document.getElementById('inv-filter-review') || {}).value || '';
+    const from        = (document.getElementById('inv-from') || {}).value || '';
+    const to          = (document.getElementById('inv-to')   || {}).value || '';
     const qs = new URLSearchParams();
     if (status)      qs.set('status', status);
     if (reviewStage) qs.set('review_stage', reviewStage);
     const params = qs.toString() ? ('?' + qs.toString()) : '';
     const r = await api('/api/billing/invoices'+params);
-    const invs = r.invoices || [];
+    let invs = r.invoices || [];
+
+    // Client-side date range filter (server doesn't yet support it; cheap on small list)
+    if (from) invs = invs.filter(i => (i.invoice_date || '') >= from);
+    if (to)   invs = invs.filter(i => (i.invoice_date || '') <= to);
+
+    // Apply client-side search filter (invoice_no / client / payment_ref)
+    const q = (document.getElementById('inv-search') || {}).value || '';
+    if (q.trim()) {
+      const needle = q.trim().toLowerCase();
+      invs = invs.filter(i =>
+        (i.invoice_no || '').toLowerCase().includes(needle) ||
+        (i.client_name || '').toLowerCase().includes(needle) ||
+        (i.payment_ref || '').toLowerCase().includes(needle)
+      );
+    }
+    LAST_INVOICES_FILTERED = invs;
+    renderInvoiceKPIs(invs);
+
     const wrap = document.getElementById('invoices-table'); if (!wrap) return;
     if (!invs.length) { wrap.innerHTML = '<div class="empty" style="padding:16px;color:var(--muted)">No invoices found.</div>'; return; }
     const today = todayISO();
@@ -1102,16 +1218,414 @@
                  <button class="btn btn-sm btn-ghost" onclick="showReviewStageMenu(${i.id}, '${i.review_stage||''}')" title="Change review stage">🏷 Stage</button>
                  <button class="btn btn-sm btn-accent" onclick="issueDraftFromList(${i.id})">✅ Issue</button>
                  <button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})">Cancel</button>`
-              : `<button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})">PDF</button>
-                 <button class="btn btn-sm btn-ghost" onclick="exportLEDES(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Export in LEDES format for corporate e-billing platforms (Tymetrix, LegalTracker, etc.)">📤 LEDES</button>
-                 <button class="btn btn-sm btn-ghost" onclick="emailInvoice(${i.id},'${escapeHtml(i.client_name)}')">📧 Email</button>
-                 ${(i.status==='issued'||isOverdue) ? `<button class="btn btn-sm btn-success" onclick="markPaid(${i.id})">✓ Paid</button>` : ''}
-                 ${i.status==='issued' ? `<button class="btn btn-sm btn-ghost" onclick="reviseInvoice(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Cancel this invoice and start a new draft with the same items">🔁 Revise</button>` : ''}
-                 ${i.status!=='cancelled'&&i.status!=='paid' ? `<button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})">Cancel</button>` : ''}`
+              : `<button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})" title="Download invoice PDF">PDF</button>
+                 <button class="btn btn-sm btn-ghost" onclick="exportLEDES(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Export in LEDES format for corporate e-billing platforms (Tymetrix, LegalTracker, etc.)">LEDES</button>
+                 <button class="btn btn-sm btn-ghost" onclick="emailInvoice(${i.id},'${escapeHtml(i.client_name)}')" title="Email this invoice to the client">Email</button>
+                 ${(i.status==='issued'||isOverdue) ? `<button class="btn btn-sm btn-success" onclick="markPaid(${i.id})" title="Mark this invoice as paid">Paid</button>` : ''}
+                 ${i.status==='issued' ? `<button class="btn btn-sm btn-ghost" onclick="reviseInvoice(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Cancel this invoice and start a new draft with the same items">Revise</button>` : ''}
+                 ${i.status==='paid' ? `<button class="btn btn-sm btn-ghost" onclick="unmarkPaid(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Revert to Issued — use this if Paid was clicked by mistake. Audit-logged.">Unmark</button>` : ''}
+                 ${i.status!=='cancelled'&&i.status!=='paid' ? `<button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})" title="Cancel this invoice">Cancel</button>` : ''}
+                 ${isSuperAdmin ? renderInvoiceAdminMenu(i) : ''}`
             }
           </td>
         </tr>`;
       }).join('')}</tbody></table>`;
+  };
+
+  // Slim KPI strip above the invoice table. Compact single-line cards so
+  // they don't dominate the screen — just at-a-glance counts + amounts.
+  function renderInvoiceKPIs(invs) {
+    const kpiEl = document.getElementById('inv-kpis');
+    if (!kpiEl) return;
+    const today = todayISO();
+    const s = { total: invs.length, totalAmt: 0, issued: 0, issuedAmt: 0, paid: 0, paidAmt: 0, overdue: 0, overdueAmt: 0, draft: 0 };
+    for (const i of invs) {
+      const amt = Number(i.total) || 0;
+      s.totalAmt += amt;
+      const od = i.status === 'issued' && i.due_date && i.due_date < today;
+      if (od)                          { s.overdue++; s.overdueAmt += amt; }
+      else if (i.status === 'issued')  { s.issued++;  s.issuedAmt  += amt; }
+      if (i.status === 'paid')         { s.paid++;    s.paidAmt    += amt; }
+      if (i.status === 'draft')        { s.draft++; }
+    }
+    const card = (label, value, sub, color) =>
+      `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;border-left:3px solid ${color};">
+         <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">${label}</div>
+         <div style="font-size:20px;font-weight:700;color:${color};margin-top:2px;">${value}</div>
+         <div style="font-size:11px;color:#94a3b8;margin-top:2px;">${sub}</div>
+       </div>`;
+    kpiEl.innerHTML =
+      card('Total',     s.total,   fmtMoney(s.totalAmt,   'INR'), '#1E2761') +
+      card('Issued',    s.issued,  fmtMoney(s.issuedAmt,  'INR'), '#3b82f6') +
+      card('Paid',      s.paid,    fmtMoney(s.paidAmt,    'INR'), '#16a34a') +
+      card('Overdue',   s.overdue, fmtMoney(s.overdueAmt, 'INR'), s.overdue > 0 ? '#dc2626' : '#94a3b8') +
+      card('Drafts',    s.draft,   'in progress',                 '#92400e') +
+      card('Collected', (s.total ? Math.round(s.paid/s.total*100) : 0) + '%', s.paid + ' of ' + s.total, '#16a34a');
+  }
+
+  // Debounced search — refetch only after user pauses typing for 250ms.
+  let _invSearchTimer = null;
+  window.onInvSearchInput = function() {
+    clearTimeout(_invSearchTimer);
+    _invSearchTimer = setTimeout(() => loadInvoices(), 250);
+  };
+
+  // Excel export of the currently-filtered invoice list. Uses SheetJS (XLSX,
+  // already loaded at the top of admin.html). Produces a proper .xlsx file
+  // with bold headers, sensible column widths, and a Summary sheet —
+  // looks professional when opened in Excel / Numbers / Google Sheets.
+  // Falls back to CSV if XLSX is unavailable.
+  window.exportInvoicesExcel = function() {
+    if (!LAST_INVOICES_FILTERED || !LAST_INVOICES_FILTERED.length) {
+      showAlert('alert', 'No invoices to export. Adjust filters first.', 'warning');
+      return;
+    }
+    const today = todayISO();
+    const filterStatus = (document.getElementById('inv-filter-status') || {}).value || 'All';
+    const filterFrom   = (document.getElementById('inv-from')          || {}).value || '';
+    const filterTo     = (document.getElementById('inv-to')            || {}).value || '';
+    const filterSearch = (document.getElementById('inv-search')        || {}).value || '';
+
+    // Build the data rows for the Invoices sheet
+    const header = ['Invoice No', 'Client', 'Date', 'Due Date', 'Currency',
+                    'Subtotal', 'Tax', 'Discount', 'Total', 'Status', 'Payment Ref', 'Paid At'];
+    const rows = [header];
+    let sumSub = 0, sumTax = 0, sumDisc = 0, sumTotal = 0;
+    const statusCount = { issued:0, paid:0, overdue:0, draft:0, cancelled:0 };
+
+    for (const i of LAST_INVOICES_FILTERED) {
+      const isOverdue = i.status === 'issued' && i.due_date && i.due_date < today;
+      const status = isOverdue ? 'overdue' : (i.status || '');
+      if (statusCount.hasOwnProperty(status)) statusCount[status]++;
+      sumSub   += Number(i.subtotal        || 0);
+      sumTax   += Number(i.tax_amount      || 0);
+      sumDisc  += Number(i.discount_amount || 0);
+      sumTotal += Number(i.total           || 0);
+      rows.push([
+        i.invoice_no || '',
+        i.client_name || '',
+        i.invoice_date || '',
+        i.due_date || '',
+        i.currency || 'INR',
+        Number(i.subtotal        || 0),
+        Number(i.tax_amount      || 0),
+        Number(i.discount_amount || 0),
+        Number(i.total           || 0),
+        status,
+        i.payment_ref || '',
+        i.paid_at || ''
+      ]);
+    }
+    // Total row
+    rows.push([
+      '', '', '', '', 'TOTAL',
+      Number(sumSub.toFixed(2)),
+      Number(sumTax.toFixed(2)),
+      Number(sumDisc.toFixed(2)),
+      Number(sumTotal.toFixed(2)),
+      '', '', ''
+    ]);
+
+    // Build Summary sheet
+    const summary = [
+      ['AP & Partners — Invoice Export Summary'],
+      [],
+      ['Generated on',     new Date().toLocaleString('en-IN')],
+      ['Generated by',     me.full_name || me.email],
+      [],
+      ['Filters Applied'],
+      ['Status filter',    filterStatus || 'All'],
+      ['Date range',       (filterFrom || filterTo) ? `${filterFrom || '...'}  to  ${filterTo || '...'}` : 'All time'],
+      ['Search term',      filterSearch || '(none)'],
+      [],
+      ['Result Summary'],
+      ['Total invoices',   LAST_INVOICES_FILTERED.length],
+      ['Issued (pending)', statusCount.issued],
+      ['Paid',             statusCount.paid],
+      ['Overdue',          statusCount.overdue],
+      ['Draft',            statusCount.draft],
+      ['Cancelled',        statusCount.cancelled],
+      [],
+      ['Financial Totals'],
+      ['Subtotal',         Number(sumSub.toFixed(2))],
+      ['Tax',              Number(sumTax.toFixed(2))],
+      ['Discount',         Number(sumDisc.toFixed(2))],
+      ['Grand Total',      Number(sumTotal.toFixed(2))]
+    ];
+
+    // Try SheetJS first (proper .xlsx). Fallback to CSV if not loaded.
+    if (typeof XLSX === 'undefined') {
+      showAlert('alert', 'Excel library not loaded — falling back to CSV.', 'warning');
+      downloadCSV('invoices-' + today + '.csv', rows);
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Invoices (data)
+    const wsData = XLSX.utils.aoa_to_sheet(rows);
+    wsData['!cols'] = [
+      { wch: 14 },  // Invoice No
+      { wch: 28 },  // Client
+      { wch: 12 },  // Date
+      { wch: 12 },  // Due Date
+      { wch: 10 },  // Currency
+      { wch: 12 },  // Subtotal
+      { wch: 10 },  // Tax
+      { wch: 10 },  // Discount
+      { wch: 14 },  // Total
+      { wch: 12 },  // Status
+      { wch: 18 },  // Payment Ref
+      { wch: 14 }   // Paid At
+    ];
+    // Number format the currency columns (F-I = subtotal/tax/discount/total)
+    const range = XLSX.utils.decode_range(wsData['!ref']);
+    for (let R = 1; R <= range.e.r; R++) {
+      for (const col of ['F','G','H','I']) {
+        const cellAddr = col + (R + 1);
+        if (wsData[cellAddr] && typeof wsData[cellAddr].v === 'number') {
+          wsData[cellAddr].t = 'n';
+          wsData[cellAddr].z = '#,##0.00';
+        }
+      }
+    }
+    XLSX.utils.book_append_sheet(wb, wsData, 'Invoices');
+
+    // Sheet 2: Summary
+    const wsSum = XLSX.utils.aoa_to_sheet(summary);
+    wsSum['!cols'] = [{ wch: 22 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(wb, wsSum, 'Summary');
+
+    XLSX.writeFile(wb, 'invoices-' + today + '.xlsx');
+  };
+
+  // Keep old name as alias so any cached HTML still works
+  window.exportInvoicesCSV = window.exportInvoicesExcel;
+
+  // ─── Compose & Send Custom Email ─────────────────────────────────────────
+  // Replaces the auto-notification spam. Admin clicks "📧 Compose Email"
+  // and gets a modal to enter recipients, subject, and body. Nothing goes
+  // out unless they explicitly click Send.
+  // Compose Email modal. Optional invoiceId enables "Attach Invoice PDF"
+  // checkbox — useful when emailing an invoice directly to a client.
+  window.openComposeEmail = function(presetTo, presetSubject, presetBody, invoiceId) {
+    const modal = document.createElement('div');
+    modal.id = 'compose-email-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const attachRow = invoiceId
+      ? `<label style="font-weight:600;color:#1E2761;font-size:13px;">Attach</label>
+         <label style="display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;cursor:pointer;">
+           <input type="checkbox" id="ce-attach-pdf" checked>
+           <span>📎 Attach Invoice PDF</span>
+         </label>`
+      : '';
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:680px;width:92%;max-height:90vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <h3 style="margin:0 0 6px;font-family:Georgia,serif;color:#1E2761;font-size:20px;">📧 Compose Email</h3>
+        <p style="font-size:12px;color:#64748b;margin:0 0 18px;">Sent from <strong>accounts@appartners.in</strong>. Audit-logged with your name as sender.</p>
+        <div id="ce-alert" class="alert hidden" style="margin-bottom:12px;"></div>
+
+        <div style="display:grid;grid-template-columns:90px 1fr;gap:10px 12px;align-items:center;">
+          <label style="font-weight:600;color:#1E2761;font-size:13px;">To <span style="color:#dc2626;">*</span></label>
+          <input id="ce-to" type="text" value="${escapeHtml(presetTo || '')}" placeholder="email1@example.com, email2@example.com" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+
+          <label style="font-weight:600;color:#1E2761;font-size:13px;">CC</label>
+          <input id="ce-cc" type="text" placeholder="optional cc recipients" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+
+          <label style="font-weight:600;color:#1E2761;font-size:13px;">Subject <span style="color:#dc2626;">*</span></label>
+          <input id="ce-subject" type="text" value="${escapeHtml(presetSubject || '')}" placeholder="e.g. Invoice AP/2026/0008 — for review" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+
+          <label style="font-weight:600;color:#1E2761;font-size:13px;align-self:start;padding-top:6px;">Message <span style="color:#dc2626;">*</span></label>
+          <textarea id="ce-body" rows="10" placeholder="Type your message here..." style="padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;resize:vertical;font-family:inherit;">${escapeHtml(presetBody || '')}</textarea>
+
+          ${attachRow}
+        </div>
+
+        <div style="margin-top:10px;padding:10px 12px;background:#f8fafc;border-radius:6px;font-size:11px;color:#64748b;">
+          💡 <strong>Quick recipient shortcuts:</strong>
+          <button type="button" onclick="ceAddAdmins()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ All Admins</button>
+          <button type="button" onclick="ceAddBilling()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ Billing</button>
+          <button type="button" onclick="ceAddPartners()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ Partners</button>
+          <button type="button" onclick="ceAddAllStaff()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ All Staff</button>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+          <button class="btn btn-ghost" onclick="document.getElementById('compose-email-modal').remove()">Cancel</button>
+          <button class="btn btn-accent" id="ce-send-btn" onclick="sendComposedEmail(${invoiceId || 'null'})">📨 Send Email</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  };
+
+  // Tiny helper to get a sensible from-address hint shown in the modal subtitle.
+  function process_env_smtp_from() {
+    return (window.AP_CONFIG && window.AP_CONFIG.smtp_from) || null;
+  }
+
+  // Append a comma-separated set of emails to the To field (without duplicates).
+  function ceAppendEmails(emails) {
+    const toEl = document.getElementById('ce-to');
+    const existing = (toEl.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    for (const e of emails) {
+      if (!existing.includes(e.toLowerCase())) existing.push(e);
+    }
+    toEl.value = existing.join(', ');
+  }
+
+  window.ceAddAdmins = async function() {
+    try {
+      const r = await api('/api/users');
+      const emails = (r.users || []).filter(u =>
+        ['admin','super_admin'].includes(u.role_code) && u.is_active && !u.deleted_at
+      ).map(u => u.email);
+      ceAppendEmails(emails);
+    } catch(e) { showAlert('ce-alert', e.message); }
+  };
+  window.ceAddBilling = async function() {
+    try {
+      const r = await api('/api/users');
+      const emails = (r.users || []).filter(u =>
+        (u.role_code === 'billing' || u.role === 'billing') && u.is_active && !u.deleted_at
+      ).map(u => u.email);
+      ceAppendEmails(emails);
+    } catch(e) { showAlert('ce-alert', e.message); }
+  };
+  window.ceAddPartners = async function() {
+    try {
+      const r = await api('/api/users');
+      // Partners can be identified either by their timekeeper_classification
+      // (SENIOR_PARTNER / PARTNER) OR by designation text containing "partner"
+      // (fallback for users created before the classification field existed).
+      const emails = (r.users || []).filter(u => {
+        if (!u.is_active || u.deleted_at) return false;
+        const cls = (u.timekeeper_classification || '').toUpperCase();
+        const desig = (u.designation || '').toLowerCase();
+        return cls === 'SENIOR_PARTNER' || cls === 'PARTNER' || desig.includes('partner');
+      }).map(u => u.email);
+
+      if (!emails.length) {
+        showAlert('ce-alert', 'No users with Partner designation found. Set "Designation = Partner / Senior Partner" in Masters > Users for the relevant users.', 'warning');
+        return;
+      }
+      ceAppendEmails(emails);
+    } catch(e) { showAlert('ce-alert', e.message); }
+  };
+
+  window.ceAddAllStaff = async function() {
+    try {
+      const r = await api('/api/users');
+      const emails = (r.users || []).filter(u =>
+        u.is_active && !u.deleted_at && u.email
+      ).map(u => u.email);
+      ceAppendEmails(emails);
+    } catch(e) { showAlert('ce-alert', e.message); }
+  };
+
+  // Two-step send: clicking "Send Email" first opens a confirmation popup
+  // with a preview of recipients / subject / attachment, so the user can
+  // catch typos or wrong recipients before the email actually goes out.
+  // The actual send happens in confirmSendEmail() below.
+  window.sendComposedEmail = function(invoiceId) {
+    const to      = document.getElementById('ce-to').value.trim();
+    const cc      = document.getElementById('ce-cc').value.trim();
+    const subject = document.getElementById('ce-subject').value.trim();
+    const body    = document.getElementById('ce-body').value.trim();
+    if (!to)      { showAlert('ce-alert', 'Recipient (To) is required'); return; }
+    if (!subject) { showAlert('ce-alert', 'Subject is required'); return; }
+    if (!body)    { showAlert('ce-alert', 'Message body is required'); return; }
+
+    const attachPdf = document.getElementById('ce-attach-pdf');
+    const wantAttach = attachPdf && attachPdf.checked && invoiceId;
+
+    // Show safety-check preview modal before sending
+    const recipients = to.split(',').map(s => s.trim()).filter(Boolean);
+    const ccList     = cc ? cc.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    const confirmModal = document.createElement('div');
+    confirmModal.id = 'send-confirm-modal';
+    confirmModal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:10000;';
+    confirmModal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:560px;width:92%;box-shadow:0 10px 40px rgba(0,0,0,0.3);border-top:5px solid #f59e0b;">
+        <h3 style="margin:0 0 6px;font-family:Georgia,serif;color:#1E2761;font-size:20px;">⚠️ Confirm Send</h3>
+        <p style="font-size:13px;color:#64748b;margin:0 0 16px;">Please review the email before sending. <strong style="color:#dc2626;">This cannot be undone.</strong></p>
+
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:12px 14px;font-size:13px;">
+          <div style="margin-bottom:8px;">
+            <span style="color:#64748b;display:inline-block;width:70px;font-weight:600;">📨 To:</span>
+            ${recipients.map(e => '<span style="display:inline-block;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:11px;margin:2px;border:1px solid #fcd34d;">' + escapeHtml(e) + '</span>').join('')}
+            <div style="font-size:11px;color:#64748b;margin-top:4px;margin-left:75px;">${recipients.length} recipient${recipients.length===1?'':'s'}</div>
+          </div>
+          ${ccList.length ? `
+          <div style="margin-bottom:8px;">
+            <span style="color:#64748b;display:inline-block;width:70px;font-weight:600;">📋 CC:</span>
+            ${ccList.map(e => '<span style="display:inline-block;background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:10px;font-size:11px;margin:2px;border:1px solid #93c5fd;">' + escapeHtml(e) + '</span>').join('')}
+          </div>` : ''}
+          <div style="margin-bottom:8px;">
+            <span style="color:#64748b;display:inline-block;width:70px;font-weight:600;">📝 Subject:</span>
+            <span style="color:#1f2937;font-weight:600;">${escapeHtml(subject)}</span>
+          </div>
+          ${wantAttach ? `
+          <div style="margin-bottom:8px;">
+            <span style="color:#64748b;display:inline-block;width:70px;font-weight:600;">📎 Attached:</span>
+            <span style="color:#16a34a;font-weight:600;">Invoice PDF</span>
+          </div>` : ''}
+          <div>
+            <span style="color:#64748b;display:inline-block;width:70px;font-weight:600;vertical-align:top;">💬 Body:</span>
+            <span style="color:#64748b;font-size:11px;">${body.length} characters · first 100: "${escapeHtml(body.slice(0, 100))}${body.length > 100 ? '...' : ''}"</span>
+          </div>
+        </div>
+
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:8px 12px;margin-top:12px;font-size:12px;color:#92400e;">
+          ⚠️ Double-check the recipient list above. Make sure no wrong/test emails are included.
+        </div>
+
+        <div style="display:flex;justify-content:space-between;gap:8px;margin-top:18px;">
+          <button onclick="document.getElementById('send-confirm-modal').remove()" style="padding:8px 18px;background:#f1f5f9;color:#1f2937;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-weight:600;">← Go Back & Edit</button>
+          <button id="confirm-send-btn" onclick="confirmSendEmail(${invoiceId || 'null'}, ${wantAttach})" style="padding:8px 22px;background:#16a34a;color:#fff;border:0;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px;">✅ Yes, Send Now</button>
+        </div>
+      </div>`;
+    document.body.appendChild(confirmModal);
+    // Don't allow closing by clicking backdrop — force explicit decision
+    confirmModal.addEventListener('click', e => {
+      if (e.target === confirmModal) {
+        // Flash to highlight that they should click a button
+        confirmModal.firstElementChild.style.animation = 'shake 0.3s';
+        setTimeout(() => { confirmModal.firstElementChild.style.animation = ''; }, 400);
+      }
+    });
+  };
+
+  // Actual send after user confirmed via the safety-check popup.
+  window.confirmSendEmail = async function(invoiceId, wantAttach) {
+    const to      = document.getElementById('ce-to').value.trim();
+    const cc      = document.getElementById('ce-cc').value.trim();
+    const subject = document.getElementById('ce-subject').value.trim();
+    const body    = document.getElementById('ce-body').value.trim();
+
+    const confirmBtn = document.getElementById('confirm-send-btn');
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = '⏳ Sending...'; }
+
+    try {
+      if (wantAttach && invoiceId) {
+        await api('/api/billing/invoices/' + invoiceId + '/email', {
+          method:'POST',
+          body:{ to, cc, subject, body }
+        });
+      } else {
+        await api('/api/admin-tools/email/compose', { method:'POST', body:{ to, cc, subject, body } });
+      }
+      // Close BOTH the confirm modal and the compose modal
+      const confirmModal = document.getElementById('send-confirm-modal'); if (confirmModal) confirmModal.remove();
+      const composeModal = document.getElementById('compose-email-modal'); if (composeModal) composeModal.remove();
+      showAlert('alert', wantAttach ? '✅ Invoice email sent with PDF attached.' : '✅ Email sent successfully.', 'success');
+    } catch (e) {
+      if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '✅ Yes, Send Now'; }
+      // Show error in the confirm modal so they don't have to navigate back
+      const alertEl = document.getElementById('ce-alert');
+      if (alertEl) showAlert('ce-alert', e.message || 'Failed to send email');
+      else alert('Failed to send: ' + (e.message || 'unknown error'));
+    }
   };
 
   window.downloadInvoicePDF = function(id) {
@@ -1146,7 +1660,16 @@
               <span style="display:inline-block;font-size:10px;background:#16A34A;color:#FFFFFF;padding:2px 8px;border-radius:10px;margin-left:8px;font-weight:700;letter-spacing:0.5px;">RECOMMENDED</span>
             </div>
             <div style="font-size:12px;color:#64748B !important;margin-top:6px;line-height:1.5;">
-              International format with currency support. Most widely accepted by corporate e-billing platforms (~80% coverage).
+              International format with currency. Uses Tymetrix-compatible field names (LINE_ITEM_UNITS) accepted by ledesshield.com, Tymetrix 360, LegalTracker, and most corporate e-billing platforms.
+            </div>
+          </div>
+
+          <div class="ledes-fmt-card" data-fmt="1998BI" data-style="official" style="cursor:pointer;padding:14px 16px;border:1px solid #E2E8F0;background:#FFFFFF !important;border-radius:8px;transition:all 0.15s;">
+            <div style="font-weight:700;color:#1E2761 !important;font-size:15px;">
+              LEDES 1998BI <span style="font-size:11px;color:#64748B;font-weight:500;">(LEDES.org strict spec)</span>
+            </div>
+            <div style="font-size:12px;color:#64748B !important;margin-top:6px;line-height:1.5;">
+              Strict LEDES.org official naming (LINE_ITEM_NUMBER_OF_UNITS). Use ONLY if your client specifically demands LEDES.org strict compliance. Most validators reject this variant.
             </div>
           </div>
 
@@ -1190,15 +1713,109 @@
     modal.addEventListener('click', e => { if (e.target === modal) close(); });
 
     modal.querySelectorAll('.ledes-fmt-card').forEach(card => {
-      card.onclick = () => {
+      card.onclick = async () => {
         const fmt = card.dataset.fmt;
-        const token = Auth.token();
-        const url = `/api/billing/invoices/${invoiceId}/export-ledes?format=${encodeURIComponent(fmt)}&token=${encodeURIComponent(token)}`;
-        window.open(url, '_blank');
-        close();
-        showAlert('alert', `LEDES ${fmt} exported — check your downloads folder.`, 'success');
+        const style = card.dataset.style || 'official';   // 'short' for Tymetrix variant
+        const styleParam = style === 'short' ? '&style=short' : '';
+        try {
+          const v = await api(`/api/billing/invoices/${invoiceId}/validate-ledes?format=${encodeURIComponent(fmt)}`);
+          if (!v.ok || (v.warnings && v.warnings.length > 0)) {
+            close();
+            showLEDESValidationResult(invoiceId, invoiceNo, fmt, v, style);
+            return;
+          }
+          const token = Auth.token();
+          const url = `/api/billing/invoices/${invoiceId}/export-ledes?format=${encodeURIComponent(fmt)}${styleParam}&token=${encodeURIComponent(token)}`;
+          window.open(url, '_blank');
+          close();
+          const label = style === 'short' ? `${fmt} (short style)` : fmt;
+          showAlert('alert', `LEDES ${label} exported — validation passed, file downloaded.`, 'success');
+        } catch (e) {
+          close();
+          showAlert('alert', 'Validation check failed: ' + (e.message || String(e)));
+        }
       };
     });
+  };
+
+  // ─── LEDES Validation Result Modal ────────────────────────────────────────
+  // Shows the pre-export validation results in a clean panel. Errors are red
+  // (blocking), warnings are yellow (non-blocking, user can proceed). If no
+  // errors, "Proceed to Download" button does the actual export.
+  window.showLEDESValidationResult = function(invoiceId, invoiceNo, fmt, v, style) {
+    style = style || 'official';
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:1000;';
+    const errorCount = (v.errors || []).length;
+    const warnCount  = (v.warnings || []).length;
+    const headerColor = errorCount > 0 ? '#991B1B' : (warnCount > 0 ? '#92400E' : '#15803D');
+    const headerBg    = errorCount > 0 ? '#FEE2E2' : (warnCount > 0 ? '#FEF3C7' : '#DCFCE7');
+    const headerIcon  = errorCount > 0 ? '❌' : (warnCount > 0 ? '⚠️' : '✅');
+    const headerText  = errorCount > 0
+      ? `${errorCount} error(s) -- export blocked`
+      : warnCount > 0
+        ? `${warnCount} warning(s) -- review and proceed if acceptable`
+        : 'All checks passed';
+
+    const errList = (v.errors || []).map(e =>
+      `<div style="background:#FEE2E2;border-left:4px solid #DC2626;padding:10px 12px;margin-bottom:6px;border-radius:4px;">
+         <div style="font-weight:600;color:#991B1B;font-size:12px;">❌ ${escapeHtml(e.code)}</div>
+         <div style="font-size:13px;color:#1F2937;margin-top:4px;">${escapeHtml(e.msg)}</div>
+       </div>`
+    ).join('');
+
+    const warnList = (v.warnings || []).map(w =>
+      `<div style="background:#FEF3C7;border-left:4px solid #D97706;padding:10px 12px;margin-bottom:6px;border-radius:4px;">
+         <div style="font-weight:600;color:#92400E;font-size:12px;">⚠️ ${escapeHtml(w.code)}</div>
+         <div style="font-size:13px;color:#1F2937;margin-top:4px;">${escapeHtml(w.msg)}</div>
+       </div>`
+    ).join('');
+
+    const summary = v.summary ? `
+      <div style="background:#F1F5F9;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px;color:#1F2937;">
+        <strong>Invoice:</strong> ${escapeHtml(v.summary.invoice_no)} ·
+        <strong>Client:</strong> ${escapeHtml(v.summary.client || '-')} ·
+        <strong>Currency:</strong> ${v.summary.currency} ·
+        <strong>Total:</strong> ${v.summary.currency} ${v.summary.total} ·
+        <strong>Lines:</strong> ${v.summary.line_items} (${v.summary.fee_lines} fees + ${v.summary.expense_lines} expenses) ·
+        <strong>Format:</strong> ${v.summary.format}
+      </div>` : '';
+
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:720px;width:92%;max-height:88vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <h3 style="margin:0 0 6px;font-family:Georgia,serif;color:#1E2761;font-size:20px;">🔍 LEDES Validation — ${escapeHtml(invoiceNo)}</h3>
+        <div style="background:${headerBg};color:${headerColor};padding:10px 14px;border-radius:6px;font-weight:600;font-size:14px;margin:10px 0 14px;">
+          ${headerIcon} ${headerText}
+        </div>
+        ${summary}
+        ${errList ? `<h4 style="margin:14px 0 8px;color:#991B1B;font-size:14px;">Errors (must fix before export)</h4>${errList}` : ''}
+        ${warnList ? `<h4 style="margin:14px 0 8px;color:#92400E;font-size:14px;">Warnings (review)</h4>${warnList}` : ''}
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+          <button id="lv-cancel" style="padding:8px 16px;background:#F1F5F9;color:#1E2761;border:1px solid #CBD5E1;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>
+          ${errorCount === 0
+            ? `<button id="lv-proceed" style="padding:8px 18px;background:#1E2761;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Proceed to Download ${fmt}</button>`
+            : `<button disabled style="padding:8px 18px;background:#CBD5E1;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:not-allowed;">Fix Errors First</button>`
+          }
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    const close = () => modal.remove();
+    modal.querySelector('#lv-cancel').onclick = close;
+    modal.addEventListener('click', e => { if (e.target === modal) close(); });
+
+    const proceed = modal.querySelector('#lv-proceed');
+    if (proceed) {
+      proceed.onclick = () => {
+        const token = Auth.token();
+        const styleParam = style === 'short' ? '&style=short' : '';
+        const url = `/api/billing/invoices/${invoiceId}/export-ledes?format=${encodeURIComponent(fmt)}${styleParam}&token=${encodeURIComponent(token)}`;
+        window.open(url, '_blank');
+        close();
+        const label = style === 'short' ? `${fmt} (short style)` : fmt;
+        showAlert('alert', `LEDES ${label} exported.`, 'success');
+      };
+    }
   };
 
   window.markPaid = async function(id) {
@@ -1214,6 +1831,178 @@
     if (!confirm('Cancel this invoice? Entries will be released for re-billing.')) return;
     await api('/api/billing/invoices/'+id, { method:'PATCH', body:{ status:'cancelled' } });
     loadInvoices(); loadAllEntries();
+  };
+
+  // ─── Unmark Paid ──────────────────────────────────────────────────────
+  // Revert a "paid" invoice back to "issued" — usually when Mark-Paid was
+  // clicked by mistake, or when a payment bounced and needs to be undone.
+  // Backend PATCH auto-clears paid_at when transitioning out of paid.
+  // Action is audit-logged via notifyAdminsOfBillingAction in the route.
+  // ─── Compact "⚙ Admin ▾" menu shown next to invoice rows for super_admin
+  // Hides the destructive override actions (Edit / Hard-Delete) behind a single
+  // chip so the standard row stays clean. Click toggles a small floating menu.
+  // Click anywhere else (or another menu) auto-closes via the document handler
+  // wired below.
+  function renderInvoiceAdminMenu(i) {
+    const id = i.id;
+    const inv = escapeHtml(i.invoice_no);
+    const total = Number(i.total) || 0;
+    const status = i.status;
+    return `<span class="admin-menu-wrap" style="position:relative;display:inline-block;">
+      <button class="btn btn-sm btn-ghost admin-menu-trigger"
+              style="color:#7c3aed;border-color:#a78bfa;font-weight:600;"
+              onclick="toggleInvAdminMenu(${id}, event)"
+              title="Super-admin overrides (edit locked invoice, hard-delete)">⚙ Admin</button>
+      <div id="inv-admin-menu-${id}" class="admin-menu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.15);min-width:200px;z-index:50;overflow:hidden;">
+        ${status !== 'draft' ? `<button class="admin-menu-item" onclick="closeAllAdminMenus(); superAdminEditInvoice(${id}, '${inv}', '${status}')"
+                                  style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:transparent;border:none;cursor:pointer;text-align:left;font-size:12.5px;color:#7c3aed;font-weight:500;"
+                                  onmouseover="this.style.background='#faf5ff'" onmouseout="this.style.background='transparent'">
+                                  🔓 Edit invoice (override)
+                                </button>` : ''}
+        <button class="admin-menu-item" onclick="closeAllAdminMenus(); superAdminHardDelete(${id}, '${inv}', '${status}', ${total})"
+                style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:transparent;border:none;cursor:pointer;text-align:left;font-size:12.5px;color:#dc2626;font-weight:500;border-top:${status !== 'draft' ? '1px solid #f1f5f9' : 'none'};"
+                onmouseover="this.style.background='#fef2f2'" onmouseout="this.style.background='transparent'">
+          🛑 Hard-delete from DB
+        </button>
+      </div>
+    </span>`;
+  }
+  // Same compact ⚙ dropdown for masters tables (clients / users / matters).
+  // Currently only hard-delete is offered; easy to extend with more admin
+  // actions later (e.g. "Reassign to..." for users).
+  function renderEntityAdminMenu(entity, id, displayName) {
+    const safeName = escapeHtml(displayName).replace(/'/g, "&#39;");
+    const fnName = 'superAdminHardDelete_' + entity[0].toUpperCase() + entity.slice(1);
+    const menuId = entity + '-admin-menu-' + id;
+    return `<span class="admin-menu-wrap" style="position:relative;display:inline-block;">
+      <button class="btn btn-sm btn-ghost admin-menu-trigger"
+              style="color:#7c3aed;border-color:#a78bfa;"
+              onclick="toggleEntityAdminMenu('${menuId}', event)"
+              title="Super-admin overrides">⚙ Admin</button>
+      <div id="${menuId}" class="admin-menu" style="display:none;position:absolute;top:calc(100% + 4px);right:0;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.15);min-width:220px;z-index:50;overflow:hidden;">
+        <button class="admin-menu-item" onclick="closeAllAdminMenus(); ${fnName}(${id}, '${safeName}')"
+                style="display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:transparent;border:none;cursor:pointer;text-align:left;font-size:12.5px;color:#dc2626;font-weight:500;"
+                onmouseover="this.style.background='#fef2f2'" onmouseout="this.style.background='transparent'">
+          🛑 Hard-delete from DB
+        </button>
+      </div>
+    </span>`;
+  }
+  window.toggleEntityAdminMenu = function(menuId, ev) {
+    if (ev) ev.stopPropagation();
+    const target = document.getElementById(menuId);
+    const wasOpen = target && target.style.display !== 'none';
+    closeAllAdminMenus();
+    if (target && !wasOpen) target.style.display = 'block';
+  };
+
+  // Toggle a single invoice's admin menu and close any others that were open.
+  window.toggleInvAdminMenu = function(id, ev) {
+    if (ev) ev.stopPropagation();
+    const target = document.getElementById('inv-admin-menu-' + id);
+    const wasOpen = target && target.style.display !== 'none';
+    closeAllAdminMenus();
+    if (target && !wasOpen) target.style.display = 'block';
+  };
+  window.closeAllAdminMenus = function() {
+    document.querySelectorAll('.admin-menu').forEach(el => { el.style.display = 'none'; });
+  };
+  // Outside-click closes any open menu. Bind once.
+  if (!window.__adminMenuOutsideBound) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.admin-menu-wrap')) closeAllAdminMenus();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllAdminMenus(); });
+    window.__adminMenuOutsideBound = true;
+  }
+
+  // ─── 🔓 Super-admin override: edit an issued/paid/cancelled invoice ───
+  // Opens the existing draft editor (which is set up to send admin_override
+  // automatically when the loaded invoice isn't in draft status). The backend
+  // PUT /items endpoint accepts admin_override:true only for super_admin and
+  // audit-logs a before-snapshot.
+  window.superAdminEditInvoice = async function(id, invoiceNo, status) {
+    if (!confirm(
+      `🔓 SUPER-ADMIN OVERRIDE\n\n` +
+      `You are about to open invoice ${invoiceNo} (status: ${status.toUpperCase()}) for editing.\n\n` +
+      `This bypasses the firm-wide rule that only DRAFT invoices can be edited.\n\n` +
+      `A before-and-after snapshot will be saved in the audit log with your user ID.\n\n` +
+      `Use this only for genuine correction scenarios. Continue?`
+    )) return;
+    const reason = prompt(
+      'Reason for editing this ' + status + ' invoice (logged in audit trail):',
+      ''
+    );
+    if (reason === null) return;  // user cancelled the reason prompt
+    // Stash the override context so saveDraftEdits picks it up on Save.
+    window.__superAdminOverrideCtx = { reason: reason || '(no reason given)' };
+    editDraftInvoice(id);
+  };
+
+  // ─── 🛑 Super-admin: hard-delete an invoice ──────────────────────────
+  // Bypasses no-hard-delete policy. Removes invoice + line items + ledes
+  // exports from DB; releases linked timesheet entries. Audit log keeps a
+  // full snapshot so the deletion itself is traceable.
+  window.superAdminHardDelete = async function(id, invoiceNo, status, total) {
+    const warningCopy = (status === 'paid' || status === 'issued') && Number(total) > 0
+      ? '\n\n⚠️ DANGER: This invoice has a non-zero total and is marked ' + status.toUpperCase() +
+        '. Deleting a real financial record can violate GST / IT compliance. ' +
+        'Strongly prefer Cancel over Delete unless this is genuinely a test/duplicate.'
+      : '';
+
+    if (!confirm(
+      `🛑 PERMANENT HARD-DELETE\n\n` +
+      `Invoice: ${invoiceNo}\n` +
+      `Status:  ${status.toUpperCase()}\n` +
+      `Total:   INR ${Number(total).toLocaleString('en-IN', { minimumFractionDigits: 2 })}\n\n` +
+      `This will:\n` +
+      `• Permanently delete the invoice row + all its line items\n` +
+      `• Delete any LEDES export records\n` +
+      `• Release linked timesheet entries (back to billable)\n` +
+      `• Preserve an audit-log entry with full snapshot\n` +
+      `${warningCopy}\n\n` +
+      `Type the invoice number to confirm in the next prompt.`
+    )) return;
+
+    const confirmText = prompt(`Type ${invoiceNo} exactly to confirm permanent deletion:`, '');
+    if (confirmText !== invoiceNo) {
+      alert('Confirmation text did not match. Deletion cancelled — no changes made.');
+      return;
+    }
+    const reason = prompt(
+      'Reason for hard-deleting (logged in audit trail):',
+      'Test invoice cleanup'
+    );
+    if (reason === null) return;
+
+    try {
+      const r = await api('/api/billing/invoices/' + id, {
+        method: 'DELETE',
+        body: { confirm: 'DELETE', reason: reason || 'No reason provided' }
+      });
+      showAlert('alert', `🗑 ${r.invoice_no} permanently deleted. ${r.deleted.entries_released} timesheet entry(ies) released.`, 'success');
+      loadInvoices();
+      if (document.getElementById('tab-outstanding')?.classList.contains('active')) loadOutstanding();
+    } catch(e) { showAlert('alert', '❌ Delete failed: ' + e.message); }
+  };
+
+  window.unmarkPaid = async function(id, invoiceNo) {
+    const ok = confirm(
+      `Unmark ${invoiceNo} as Paid?\n\n` +
+      `This will:\n` +
+      `• Revert status from PAID → ISSUED\n` +
+      `• Clear the payment date\n` +
+      `• Keep the payment reference (for traceability)\n` +
+      `• Log this action in the audit trail\n\n` +
+      `Use this when "Mark Paid" was clicked by mistake. After unmarking, you can Cancel the invoice if needed.`
+    );
+    if (!ok) return;
+    try {
+      await api('/api/billing/invoices/'+id, { method:'PATCH', body:{ status:'issued' } });
+      showAlert('alert', `Invoice ${invoiceNo} reverted to ISSUED. You can now Cancel or Revise it.`, 'success');
+      loadInvoices();
+      if (document.getElementById('tab-outstanding')?.classList.contains('active')) loadOutstanding();
+    } catch(e) { showAlert('alert', e.message); }
   };
 
   // ─── Revise an issued invoice ─────────────────────────────────────────────
@@ -1255,11 +2044,34 @@
       DRAFT_EDIT_TAX_RATE = Number(inv.tax_rate || 0);
 
       document.getElementById('ed-inv-no-display').textContent = inv.invoice_no;
+      // Visual cue when we're in super-admin override mode (editing a
+      // non-draft invoice). The chip is rendered next to the invoice number
+      // in the modal header so the operator can't miss it.
+      const headerEl = document.getElementById('ed-inv-no-display');
+      if (headerEl) {
+        const existingChip = headerEl.parentElement.querySelector('.override-chip');
+        if (existingChip) existingChip.remove();
+        if (window.__superAdminOverrideCtx && inv.status !== 'draft') {
+          const chip = document.createElement('span');
+          chip.className = 'override-chip';
+          chip.textContent = '🔓 SUPER-ADMIN OVERRIDE · status: ' + (inv.status||'').toUpperCase();
+          chip.style.cssText = 'margin-left:10px;padding:3px 9px;background:#7c3aed;color:#fff;font-size:10.5px;font-weight:700;letter-spacing:.6px;border-radius:12px;vertical-align:middle;';
+          headerEl.parentElement.appendChild(chip);
+        }
+      }
       document.getElementById('ed-inv-no').value = inv.invoice_no || '';
       document.getElementById('ed-inv-no').dataset.original = inv.invoice_no || '';
       document.getElementById('ed-date').value = inv.invoice_date || '';
       document.getElementById('ed-due').value  = inv.due_date  || '';
       document.getElementById('ed-notes').value = inv.notes || '';
+      // Reverse charge dropdown — default to yes for legacy rows where the
+      // column is NULL (matches the original behaviour of those invoices).
+      const edRcSel = document.getElementById('ed-reverse-charge');
+      if (edRcSel) {
+        const rcVal = (inv.reverse_charge === undefined || inv.reverse_charge === null)
+                      ? 1 : Number(inv.reverse_charge);
+        edRcSel.value = rcVal ? 'yes' : 'no';
+      }
       document.getElementById('ed-items-body').innerHTML = '';
       document.getElementById('ed-alert').className = 'alert hidden';
 
@@ -1309,6 +2121,9 @@
   window.closeDraftEditor = function() {
     document.getElementById('edit-draft-overlay').style.display = 'none';
     DRAFT_EDIT_ID = null;
+    // Drop any pending super-admin override context — if user reopens a real
+    // draft next, we don't want the override flag bleeding through.
+    window.__superAdminOverrideCtx = null;
   };
 
   window.edAddRow = function(desc, qty, unit, rate, amt, matterId, userId) {
@@ -1363,13 +2178,19 @@
     });
     subtotal = Math.round(subtotal * 100) / 100;
     const taxAmt = Math.round(subtotal * (DRAFT_EDIT_TAX_RATE / 100) * 100) / 100;
-    const total  = subtotal; // reverse charge
+    const rcSel = document.getElementById('ed-reverse-charge');
+    const isReverseCharge = rcSel ? (rcSel.value === 'yes') : true;
+    const total  = isReverseCharge ? subtotal : (subtotal + taxAmt);
     const fmt = n => n.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2});
     const subEl = document.getElementById('ed-subtotal'); if (subEl) subEl.textContent = fmt(subtotal);
     const taxEl = document.getElementById('ed-tax-amt');  if (taxEl) taxEl.textContent = fmt(taxAmt);
     const totEl = document.getElementById('ed-total');    if (totEl) totEl.textContent = fmt(total);
     const taxLbl = document.getElementById('ed-tax-label');
-    if (taxLbl) taxLbl.textContent = `GST ${DRAFT_EDIT_TAX_RATE}% (Reverse Charge — payable by client)`;
+    if (taxLbl) {
+      taxLbl.textContent = isReverseCharge
+        ? `GST ${DRAFT_EDIT_TAX_RATE}% (Reverse Charge — payable by client directly)`
+        : `GST ${DRAFT_EDIT_TAX_RATE}% (collected by firm)`;
+    }
     const taxRow = document.getElementById('ed-tax-row');
     if (taxRow) taxRow.style.display = DRAFT_EDIT_TAX_RATE > 0 ? '' : 'none';
   };
@@ -1404,13 +2225,26 @@
     if (!items) { showAlert('ed-alert', 'Please fill in a description for all line items.'); return; }
     if (!items.length) { showAlert('ed-alert', 'Add at least one line item.'); return; }
     try {
-      // 1. Save the line items + invoice header fields
-      await api('/api/billing/invoices/'+DRAFT_EDIT_ID+'/items', { method:'PUT', body:{
+      // 1. Save the line items + invoice header fields.
+      //    If superAdminEditInvoice was used to open this editor (i.e. the
+      //    invoice is NOT a draft), include admin_override + reason so the
+      //    backend lets the edit through and audit-logs the snapshot.
+      const overrideCtx = window.__superAdminOverrideCtx;
+      const putBody = {
         invoice_date: document.getElementById('ed-date').value,
         due_date:     document.getElementById('ed-due').value,
         notes:        document.getElementById('ed-notes').value,
-        items
-      }});
+        items,
+        reverse_charge: document.getElementById('ed-reverse-charge')?.value === 'yes' ? 1 : 0
+      };
+      if (overrideCtx) {
+        putBody.admin_override  = true;
+        putBody.override_reason = overrideCtx.reason;
+      }
+      await api('/api/billing/invoices/'+DRAFT_EDIT_ID+'/items', { method:'PUT', body: putBody });
+      // Clear override context after a successful save so the next normal
+      // draft edit doesn't accidentally inherit it.
+      window.__superAdminOverrideCtx = null;
       // 2. Save the review workflow fields + any invoice_no change (PATCH /:id).
       //    Backend enforces draft-only for invoice_no change; we send it unconditionally
       //    if the user touched the field — server silently ignores unchanged values.
@@ -1473,13 +2307,46 @@
     } catch(e) { showAlert('alert', e.message); }
   };
 
+  // Per-row "Email" button on each issued invoice. Opens the new Compose
+  // Email modal with the invoice details (number, client, total) pre-filled
+  // in the subject + body, and offers an "Attach PDF" checkbox so the
+  // recipient gets the actual invoice PDF as attachment (not just a text
+  // notification). This replaces the old prompt() dialog.
   window.emailInvoice = async function(id, clientName) {
-    const recipientEl = prompt(`Send invoice PDF to email for ${clientName}:\n(Enter recipient email address)`, '');
-    if (!recipientEl) return;
+    // Fetch invoice for pre-fill data
+    let inv = null;
     try {
-      await api('/api/billing/invoices/'+id+'/email', { method:'POST', body:{ to: recipientEl } });
-      showAlert('alert', 'Invoice emailed to ' + recipientEl, 'success');
-    } catch(e) { showAlert('alert', e.message); }
+      inv = await api('/api/billing/invoices/' + id);
+    } catch(e) {
+      showAlert('alert', 'Could not load invoice: ' + e.message);
+      return;
+    }
+    const i = inv.invoice || inv;
+    const cur = i.currency || 'INR';
+    const total = Number(i.total || 0).toFixed(2);
+
+    // Try to grab the client's email from cached CLIENTS list (loaded by Masters tab)
+    let clientEmail = '';
+    try {
+      const cl = (CLIENTS || []).find(c => c.id === i.client_id);
+      if (cl && cl.email) clientEmail = cl.email;
+    } catch(_) {}
+
+    const subj = `Invoice ${i.invoice_no} — ${clientName}`;
+    const body =
+`Dear Sir/Madam,
+
+Please find attached invoice ${i.invoice_no} dated ${i.invoice_date} for ${clientName}.
+
+Invoice Total: ${cur} ${total}
+${i.due_date ? 'Due Date: ' + i.due_date : ''}
+
+Kindly process the payment at your convenience. Should you have any questions or require additional information, please feel free to contact us.
+
+Best regards,
+AP & Partners`;
+
+    openComposeEmail(clientEmail, subj, body, id);
   };
 
   // ─── OUTSTANDING ─────────────────────────────────────────────────────
@@ -1712,46 +2579,91 @@
   };
 
   // ─── MASTERS ─────────────────────────────────────────────────────────
+  // Whether the current user can manage other users (create/edit/delete).
+  // Only admin and super_admin should see user management actions; billing
+  // role can view users (needed for invoice generation) but not modify.
+  const canManageUsers = isAdmin || isSuperAdmin;
+  const canManageRoles = isSuperAdmin;  // only super_admin can promote to admin/super_admin
+
   async function loadUsersTable() {
     const r = await api('/api/users'); USERS = r.users;
+    const showActions = canManageUsers;
     document.getElementById('users-table').innerHTML = `<table class="data">
-      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Designation</th><th>Code</th><th class="num">Rate (₹/hr)</th><th>Status</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Designation</th><th>Code</th><th class="num">Rate (₹/hr)</th><th>Status</th>${showActions ? '<th>Actions</th>' : ''}</tr></thead>
       <tbody>${USERS.map(u => `<tr>
         <td><strong>${escapeHtml(u.full_name)}</strong></td>
         <td>${escapeHtml(u.email)}</td>
-        <td>${u.role}</td>
+        <td>${escapeHtml(u.role_name || u.role)}</td>
         <td>${escapeHtml(u.designation||'—')}</td>
         <td><code style="font-size:11px">${escapeHtml(u.lawyer_code||'—')}</code></td>
         <td class="num">${Number(u.default_rate||0).toFixed(2)}</td>
         <td><span class="pill ${u.is_active?'paid':'cancelled'}">${u.is_active?'Active':'Inactive'}</span></td>
-        <td class="row-actions">
+        ${showActions ? `<td class="row-actions">
           <button class="btn btn-sm btn-ghost" onclick='editUser(${JSON.stringify(u).replace(/'/g,"&#39;")})'>✏ Edit</button>
           ${u.is_active ? `<button class="btn btn-sm btn-warning" onclick="deactivateUser(${u.id})">Deactivate</button>` : `<button class="btn btn-sm btn-success" onclick="reactivateUser(${u.id})">Activate</button>`}
-          <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id},'${escapeHtml(u.full_name)}')">🗑</button>
-        </td>
-      </tr>`).join('')}</tbody></table>`;
+          <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id},'${escapeHtml(u.full_name)}')" title="Soft-delete: moves to recycle bin">🗑</button>
+          ${isSuperAdmin && u.id !== me.id ? renderEntityAdminMenu('user', u.id, u.full_name) : ''}
+        </td>` : ''}
+      </tr>`).join('')}</tbody></table>
+      ${showActions ? '' : '<p style="font-size:12px;color:var(--muted);padding:10px;font-style:italic;">View-only access. Contact admin to make user changes.</p>'}`;
+
+    // Also hide "+ New user" button if no permission
+    const newBtn = document.querySelector('[onclick="newUser()"]');
+    if (newBtn) newBtn.style.display = canManageUsers ? '' : 'none';
   }
-  window.newUser = function () { editUser(null); };
+  window.newUser = function () {
+    if (!canManageUsers) {
+      showAlert('alert', 'Only admin or super_admin can create users.');
+      return;
+    }
+    editUser(null);
+  };
   window.editUser = function (u) {
+    if (!canManageUsers) {
+      showAlert('alert', 'Only admin or super_admin can create or edit users.');
+      return;
+    }
     const isNew = !u;
+    // Silent fix: autocomplete="off" + decoy fields prevent browser from
+    // autofilling the logged-in admin's email into the Full Name field.
     const html = `<div class="modal-backdrop" id="u-modal"><div class="modal">
       <div class="modal-head"><h3>${isNew?'New user':'Edit user'}</h3><button class="close" onclick="document.getElementById('u-modal').remove()">×</button></div>
-      <div class="modal-body">
-        <div id="u-alert" class="alert hidden"></div>
-        <div class="form-grid cols-2">
-          <div class="form-row"><label>Full name</label><input id="u-name" value="${escapeHtml(u?u.full_name:'')}"></div>
-          <div class="form-row"><label>Email</label><input id="u-email" type="email" value="${escapeHtml(u?u.email:'')}" ${u?'disabled':''}></div>
-          <div class="form-row"><label>Role</label><select id="u-role">
-            <option value="associate" ${u&&u.role==='associate'?'selected':''}>Associate</option>
-            <option value="billing"   ${u&&u.role==='billing'  ?'selected':''}>Billing</option>
-            <option value="admin"     ${u&&u.role==='admin'    ?'selected':''}>Admin</option>
-          </select></div>
-          <div class="form-row"><label>Designation / Dept</label><input id="u-desig" value="${escapeHtml(u?(u.designation||''):'')}" placeholder="e.g. Corporate Law"></div>
-          <div class="form-row"><label>Default rate (₹/hr)</label><input type="number" step="0.01" id="u-rate" value="${u?u.default_rate:0}"></div>
-          <div class="form-row"><label>Lawyer Code (e.g. ANS)</label><input id="u-lcode" maxlength="10" value="${escapeHtml(u?(u.lawyer_code||''):'')}"></div>
-          <div class="form-row"><label>${isNew?'Password':'New password (blank = keep)'}</label><input type="password" id="u-pwd"></div>
+      <form autocomplete="off" onsubmit="return false;">
+        <input type="text" name="fake-username" autocomplete="username" style="display:none;">
+        <input type="password" name="fake-password" autocomplete="current-password" style="display:none;">
+        <div class="modal-body">
+          <div id="u-alert" class="alert hidden"></div>
+          <div class="form-grid cols-2">
+            <div class="form-row"><label>Full name</label><input id="u-name" value="${escapeHtml(u?u.full_name:'')}" autocomplete="off" placeholder="e.g. Mohd Amir"></div>
+            <div class="form-row"><label>Email</label><input id="u-email" type="email" value="${escapeHtml(u?u.email:'')}" ${u?'disabled':''} autocomplete="new-email" placeholder="user@appartners.in"></div>
+            <div class="form-row"><label>Role</label><select id="u-role">
+              <option value="associate"   ${u&&(u.role==='associate'||u.role_code==='associate')?'selected':''}>Associate</option>
+              <option value="billing"     ${u&&(u.role==='billing'||u.role_code==='billing')?'selected':''}>Billing</option>
+              <option value="hr"          ${u&&u.role_code==='hr'?'selected':''}>HR</option>
+              <option value="partner_view" ${u&&u.role_code==='partner_view'?'selected':''}>Partner View</option>
+              ${canManageRoles
+                ? `<option value="admin"       ${u&&u.role_code==='admin'?'selected':''}>Admin</option>
+                   <option value="super_admin" ${u&&u.role_code==='super_admin'?'selected':''}>Super Admin</option>`
+                : ''}
+            </select></div>
+            <div class="form-row"><label>Department / Practice</label><input id="u-desig" value="${escapeHtml(u?(u.designation||''):'')}" placeholder="e.g. Corporate Law" autocomplete="off"></div>
+            <div class="form-row"><label>Designation</label>
+              <select id="u-tk-class">
+                <option value=""                  ${!u||!u.timekeeper_classification?'selected':''}>— Select designation —</option>
+                <option value="SENIOR_PARTNER"    ${u&&u.timekeeper_classification==='SENIOR_PARTNER'?'selected':''}>Senior Partner</option>
+                <option value="PARTNER"           ${u&&u.timekeeper_classification==='PARTNER'?'selected':''}>Partner</option>
+                <option value="SENIOR_ASSOCIATE"  ${u&&u.timekeeper_classification==='SENIOR_ASSOCIATE'?'selected':''}>Senior Associate</option>
+                <option value="ASSOCIATE"         ${u&&u.timekeeper_classification==='ASSOCIATE'?'selected':''}>Associate</option>
+                <option value="OF_COUNSEL"        ${u&&u.timekeeper_classification==='OF_COUNSEL'?'selected':''}>Of Counsel</option>
+                <option value="PARALEGAL"         ${u&&u.timekeeper_classification==='PARALEGAL'?'selected':''}>Paralegal</option>
+              </select>
+            </div>
+            <div class="form-row"><label>Default rate (₹/hr)</label><input type="number" step="0.01" min="0" id="u-rate" value="${u?u.default_rate:0}" autocomplete="off"></div>
+            <div class="form-row"><label>Lawyer Code (e.g. ANS)</label><input id="u-lcode" maxlength="10" value="${escapeHtml(u?(u.lawyer_code||''):'')}" autocomplete="off" style="text-transform:uppercase;"></div>
+            <div class="form-row"><label>${isNew?'Password':'New password (blank = keep)'}</label><input type="password" id="u-pwd" autocomplete="new-password"></div>
+          </div>
         </div>
-      </div>
+      </form>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="document.getElementById('u-modal').remove()">Cancel</button>
         <button class="btn btn-accent" onclick="saveUser(${u?u.id:'null'})">Save</button>
@@ -1759,13 +2671,15 @@
     </div></div>`;
     document.body.insertAdjacentHTML('beforeend', html);
   };
+
   window.saveUser = async function(id) {
     const body = {
-      full_name: document.getElementById('u-name').value,
+      full_name: (document.getElementById('u-name').value || '').trim(),
       role: document.getElementById('u-role').value,
-      designation: document.getElementById('u-desig').value,
+      designation: (document.getElementById('u-desig').value || '').trim(),
       default_rate: parseFloat(document.getElementById('u-rate').value)||0,
-      lawyer_code: (document.getElementById('u-lcode').value||'').trim().toUpperCase()||null
+      lawyer_code: (document.getElementById('u-lcode').value||'').trim().toUpperCase()||null,
+      timekeeper_classification: (document.getElementById('u-tk-class') && document.getElementById('u-tk-class').value) || null
     };
     const pwd = document.getElementById('u-pwd').value;
     try {
@@ -1802,6 +2716,7 @@
         <td class="row-actions">
           <button class="btn btn-sm btn-ghost" onclick='editClient(${JSON.stringify(c).replace(/'/g,"&#39;")})'>✏ Edit</button>
           <button class="btn btn-sm btn-danger" onclick="deleteClient(${c.id},'${escapeHtml(c.name)}')">🗑 Delete</button>
+          ${isSuperAdmin ? renderEntityAdminMenu('client', c.id, c.name) : ''}
         </td>
       </tr>`).join('')}</tbody></table>`;
   }
@@ -1836,6 +2751,35 @@
           </div>
           <div class="form-row full"><label>Address</label><textarea id="c-addr">${escapeHtml(c?(c.address||''):'')}</textarea></div>
         </div>
+
+        <!-- LEDES e-billing fields (for international corporate clients) -->
+        <fieldset style="margin-top:14px;padding:12px;border:1px solid #e2e8f0;border-radius:6px;background:#f8fafc;">
+          <legend style="padding:0 8px;font-weight:600;color:#1E2761;font-size:13px;">📤 LEDES e-Billing (International Clients)</legend>
+          <p style="font-size:11px;color:#64748b;margin:0 0 10px;">Fill only if this client requires LEDES export (Tymetrix, LegalTracker, etc.)</p>
+          <div class="form-grid cols-2">
+            <div class="form-row">
+              <label>Client Internal ID</label>
+              <input id="c-internal-id" value="${escapeHtml(c?(c.client_internal_id||''):'')}" placeholder="e.g., VENSURE-IN-001 (provided by client)">
+            </div>
+            <div class="form-row">
+              <label>Requires LEDES?</label>
+              <select id="c-requires-ledes">
+                <option value="0" ${!c||!c.requires_ledes?'selected':''}>No (regular PDF only)</option>
+                <option value="1" ${c&&c.requires_ledes?'selected':''}>Yes (LEDES + PDF)</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>Preferred LEDES Format</label>
+              <select id="c-ledes-format">
+                <option value=""        ${!c||!c.ledes_format?'selected':''}>— Not set —</option>
+                <option value="1998BI"  ${c&&c.ledes_format==='1998BI'?'selected':''}>LEDES 1998BI (Recommended)</option>
+                <option value="XML-2.1" ${c&&c.ledes_format==='XML-2.1'?'selected':''}>LEDES XML 2.1</option>
+                <option value="1998B"   ${c&&c.ledes_format==='1998B'?'selected':''}>LEDES 1998B (US-only)</option>
+              </select>
+            </div>
+          </div>
+        </fieldset>
+
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="document.getElementById('c-modal').remove()">Cancel</button>
@@ -1857,8 +2801,15 @@
       state_code:document.getElementById('c-statecode').value,
       kind_attn:document.getElementById('c-kindattn').value,
       ref_text:document.getElementById('c-ref').value,
-      default_currency:document.getElementById('c-currency').value || null
+      default_currency:document.getElementById('c-currency').value || null,
+      client_internal_id:(document.getElementById('c-internal-id') && document.getElementById('c-internal-id').value.trim()) || null,
+      requires_ledes: document.getElementById('c-requires-ledes') ? parseInt(document.getElementById('c-requires-ledes').value, 10) : 0,
+      ledes_format: (document.getElementById('c-ledes-format') && document.getElementById('c-ledes-format').value) || null
     };
+    // Auto-trim name and other text fields to avoid trailing whitespace
+    ['code','name','contact_person','email','phone','gstin','state_name','kind_attn'].forEach(k => {
+      if (body[k]) body[k] = String(body[k]).trim();
+    });
     try {
       if (id) await api('/api/clients/'+id, {method:'PATCH', body});
       else    await api('/api/clients',        {method:'POST', body});
@@ -1885,6 +2836,7 @@
         <td class="row-actions">
           <button class="btn btn-sm btn-ghost" onclick='editMatter(${JSON.stringify(m).replace(/'/g,"&#39;")})'>✏ Edit</button>
           <button class="btn btn-sm btn-danger" onclick="deleteMatter(${m.id},'${escapeHtml(m.title)}')">🗑</button>
+          ${isSuperAdmin ? renderEntityAdminMenu('matter', m.id, m.title) : ''}
         </td>
       </tr>`).join('')}</tbody></table>`;
   }
@@ -1946,6 +2898,41 @@
     try { await api('/api/matters/'+id, {method:'DELETE'}); showAlert('alert','Matter deleted.','success'); loadMattersTable(); loadMasters(); }
     catch(e) { alert(e.message); }
   };
+
+  // ─── 🛑 Super-admin hard-delete helpers (clients / users / matters) ──
+  // Each one: type-to-confirm + reason prompt → DELETE with ?hard=1&confirm=DELETE
+  // Backend enforces super_admin role + checks for dependent records that
+  // would orphan financial data. UI just orchestrates the confirmation flow.
+  async function _superAdminHardDeleteEntity(opts) {
+    const { entity, id, name, listUrl } = opts;
+    const label = entity[0].toUpperCase() + entity.slice(1);
+    if (!confirm(
+      `🛑 PERMANENT HARD-DELETE — ${label}\n\n` +
+      `Name: ${name}\n\n` +
+      `This permanently removes the record from the DATABASE. It does NOT go to the recycle bin and cannot be restored.\n\n` +
+      `The backend will REFUSE this if the ${entity} has any dependent records (timesheet entries, invoices, etc.) — use soft-delete in that case.\n\n` +
+      `Continue?`
+    )) return;
+    const confirmText = prompt(`Type the ${entity} name exactly to confirm:\n\n${name}`, '');
+    if (confirmText !== name) {
+      alert('Confirmation text did not match. Hard-delete cancelled — no changes made.');
+      return;
+    }
+    try {
+      await api(`/api/${entity}s/${id}?hard=1&confirm=DELETE`, { method: 'DELETE' });
+      showAlert('alert', `🛑 ${label} "${name}" hard-deleted from DB.`, 'success');
+      if (listUrl) listUrl();
+      loadMasters();
+    } catch(e) {
+      alert('Hard-delete failed: ' + (e.message || 'unknown error'));
+    }
+  }
+  window.superAdminHardDelete_Client = (id, name) =>
+    _superAdminHardDeleteEntity({ entity: 'client', id, name, listUrl: () => loadClientsTable() });
+  window.superAdminHardDelete_User = (id, name) =>
+    _superAdminHardDeleteEntity({ entity: 'user', id, name, listUrl: () => loadUsersTable() });
+  window.superAdminHardDelete_Matter = (id, name) =>
+    _superAdminHardDeleteEntity({ entity: 'matter', id, name, listUrl: () => loadMattersTable() });
 
   async function loadRatesTable() {
     const r = await api('/api/rates');
@@ -2109,6 +3096,12 @@
   document.querySelectorAll('[data-mtab]').forEach(btn => {
     btn.addEventListener('click', () => switchMTab(btn.dataset.mtab));
   });
+
+  // For HR users (who don't see Dashboard), switch to their default tab.
+  // The admin.html has Dashboard hardcoded as active; we override here.
+  if (defaultTab !== 'tab-dashboard') {
+    setTimeout(() => switchTab(defaultTab), 0);
+  }
 
   // ══ LEAVES ════════════════════════════════════════════════════════════
   let LEAVE_TYPES = [];
@@ -3105,45 +4098,177 @@
     } catch(e) { showAlert('alert', e.message); }
   };
 
+  // Cached so per-check Auto-Fix / Manual buttons can pull their context
+  // without re-running the full scan.
+  window.LAST_SCAN_REPORT = null;
+
   window.runSystemScan = async function(btnRef) {
-    // Always show IMMEDIATE feedback in result div before anything else, so
-    // the user can confirm the click fired even if the API call hangs/fails.
     const out = document.getElementById('sa-scan-result');
     if (!out) {
       alert('Scan result panel missing from the page. Try Ctrl+Shift+R to hard-refresh.');
       return;
     }
-    out.innerHTML = `<div style="background:#dbeafe;border:1px solid #3b82f6;padding:10px 12px;border-radius:6px;font-size:13px;">⏳ Running system checks… please wait (5-15 seconds).</div>`;
+    out.innerHTML = `<div style="background:#dbeafe;border:1px solid #3b82f6;padding:10px 12px;border-radius:6px;font-size:13px;">⏳ Running system + security checks… please wait (5-15 seconds).</div>`;
 
-    // Best-effort: disable the button. Don't crash if btn missing.
     const btn = btnRef || document.querySelector('#stab-sa-system button[onclick*="runSystemScan"]');
     const orig = btn ? btn.textContent : '';
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning…'; }
 
     try {
-      console.log('[scan] calling /api/admin-tools/scan');
       const r = await api('/api/admin-tools/scan', { method:'POST', body:{} });
-      console.log('[scan] response:', r);
-
       if (!r || !Array.isArray(r.checks)) {
         out.innerHTML = `<div style="background:#fee2e2;border:1px solid #ef4444;padding:10px 12px;border-radius:6px;font-size:13px;">❌ Scan returned an unexpected response. Check console for details.</div>`;
         return;
       }
-
-      const banner = r.ok
-        ? `<div style="background:#dcfce7;border:1px solid #16a34a;padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;">✅ All checks passed. System healthy.</div>`
-        : `<div style="background:#fee2e2;border:1px solid #ef4444;padding:10px 12px;border-radius:6px;font-size:13px;margin-bottom:10px;">⚠ One or more checks failed — see details below.</div>`;
-      const rows = r.checks.map(c =>
-        `<tr><td style="width:34px;text-align:center;font-size:16px;">${c.ok ? '✅' : '❌'}</td>
-             <td style="font-weight:600;width:200px;">${escapeHtml(c.name)}</td>
-             <td style="font-size:13px;color:var(--muted);">${escapeHtml(c.detail)}</td></tr>`
-      ).join('');
-      out.innerHTML = banner + `<table class="data" style="width:100%;"><tbody>${rows}</tbody></table>`;
+      window.LAST_SCAN_REPORT = r;
+      out.innerHTML = renderScanReport(r);
     } catch(e) {
       console.error('[scan] failed:', e);
       out.innerHTML = `<div style="background:#fee2e2;border:1px solid #ef4444;padding:10px 12px;border-radius:6px;font-size:13px;">❌ Scan failed: ${escapeHtml(e.message || String(e))}<br><small>Check the browser console (F12) for full details.</small></div>`;
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = orig; }
+    }
+  };
+
+  // ── Scan report renderer ─────────────────────────────────────────────
+  // Groups checks by category, colours by severity, and offers a per-check
+  // "🔧 Auto-Fix" button (when fix_code is present) + "📖 How to fix
+  // manually" toggle (when manual_steps are present).
+  function renderScanReport(r) {
+    const sevMeta = {
+      critical: { icon: '🛑', color: '#dc2626', bg: '#fee2e2', border: '#fca5a5', label: 'CRITICAL' },
+      warning:  { icon: '⚠️', color: '#d97706', bg: '#fef3c7', border: '#fcd34d', label: 'WARNING'  },
+      info:     { icon: 'ℹ️', color: '#0369a1', bg: '#dbeafe', border: '#93c5fd', label: 'INFO'     }
+    };
+    const catMeta = {
+      database:     { icon: '🗄️', label: 'Database' },
+      security:     { icon: '🔐', label: 'Security' },
+      backup:       { icon: '💾', label: 'Backup' },
+      'data-quality': { icon: '📋', label: 'Data Quality' }
+    };
+
+    const failed   = r.checks.filter(c => !c.ok);
+    const critical = failed.filter(c => c.severity === 'critical');
+    const warnings = failed.filter(c => c.severity === 'warning');
+
+    // Summary banner — concise verdict at the top
+    let banner;
+    if (critical.length) {
+      banner = `<div style="background:#fee2e2;border:1px solid #ef4444;padding:14px 16px;border-radius:8px;margin-bottom:14px;">
+        <div style="font-weight:700;color:#dc2626;font-size:14px;">🛑 ${critical.length} critical issue${critical.length>1?'s':''} need immediate attention</div>
+        <div style="font-size:12px;color:#7f1d1d;margin-top:4px;">${warnings.length ? warnings.length + ' warning(s) also detected. ' : ''}Use the Auto-Fix buttons below where available — otherwise expand "How to fix manually" for step-by-step instructions.</div>
+      </div>`;
+    } else if (warnings.length) {
+      banner = `<div style="background:#fef3c7;border:1px solid #d97706;padding:12px 14px;border-radius:8px;margin-bottom:14px;">
+        <div style="font-weight:700;color:#92400e;font-size:13px;">⚠️ ${warnings.length} warning${warnings.length>1?'s':''} — system functional but should be addressed</div>
+      </div>`;
+    } else {
+      banner = `<div style="background:#dcfce7;border:1px solid #16a34a;padding:12px 14px;border-radius:8px;margin-bottom:14px;">
+        <div style="font-weight:700;color:#166534;font-size:13px;">✅ All ${r.checks.length} checks passed — system healthy & secure.</div>
+      </div>`;
+    }
+
+    // Group by category for cleaner reading
+    const byCat = {};
+    for (const c of r.checks) {
+      const cat = c.category || 'other';
+      (byCat[cat] = byCat[cat] || []).push(c);
+    }
+
+    const order = ['security', 'database', 'backup', 'data-quality', 'other'];
+    const sections = order.filter(cat => byCat[cat]).map(cat => {
+      const meta = catMeta[cat] || { icon:'•', label: cat };
+      const rows = byCat[cat].map((c, idx) => renderCheckRow(c, idx)).join('');
+      return `<div style="margin-bottom:18px;">
+        <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:8px;">
+          ${meta.icon} ${meta.label}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px;">${rows}</div>
+      </div>`;
+    }).join('');
+
+    function renderCheckRow(c, idx) {
+      const sev = sevMeta[c.severity] || sevMeta.info;
+      const passing = c.ok;
+      const showSev = !passing && c.severity !== 'info';
+      const bg = passing ? '#f8fafc' : sev.bg;
+      const border = passing ? '#e2e8f0' : sev.border;
+      const stepsId = `scan-steps-${(c.category||'x').replace(/[^a-z]/gi,'')}-${idx}`;
+
+      let actions = '';
+      if (!passing && c.fix_code) {
+        actions += `<button class="btn btn-sm btn-accent" style="font-size:11px;padding:5px 10px;"
+                     onclick="runAutoFix('${escapeHtml(c.fix_code)}', this)">
+                     🔧 Auto-Fix
+                   </button>`;
+      }
+      if (!passing && c.manual_steps && c.manual_steps.length) {
+        actions += `<button class="btn btn-sm btn-ghost" style="font-size:11px;padding:5px 10px;"
+                     onclick="toggleScanSteps('${stepsId}', this)">
+                     📖 How to fix manually
+                   </button>`;
+      }
+
+      const manualBlock = (c.manual_steps && c.manual_steps.length) ? `
+        <div id="${stepsId}" style="display:none;margin-top:10px;padding:10px 12px;background:#fff;border:1px dashed #cbd5e1;border-radius:6px;">
+          <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">Manual repair steps</div>
+          <ol style="margin:0;padding-left:22px;font-size:12.5px;color:#334155;line-height:1.65;">
+            ${c.manual_steps.map(s => `<li style="margin-bottom:4px;">${escapeHtml(s).replace(/`([^`]+)`/g, '<code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;font-size:11.5px;">$1</code>')}</li>`).join('')}
+          </ol>
+        </div>` : '';
+
+      return `<div style="background:${bg};border:1px solid ${border};border-left:3px solid ${passing?'#16a34a':sev.color};border-radius:7px;padding:10px 12px;">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div style="font-size:16px;line-height:1.2;">${passing ? '✅' : sev.icon}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <div style="font-weight:600;font-size:13px;color:${passing?'#0f172a':sev.color};">${escapeHtml(c.name)}</div>
+              ${showSev ? `<span style="font-size:9.5px;font-weight:700;color:${sev.color};background:#fff;border:1px solid ${sev.border};padding:1px 6px;border-radius:10px;letter-spacing:.8px;">${sev.label}</span>` : ''}
+            </div>
+            <div style="font-size:12.5px;color:#475569;margin-top:3px;line-height:1.5;">${escapeHtml(c.detail || '')}</div>
+            ${actions ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">${actions}</div>` : ''}
+            ${manualBlock}
+          </div>
+        </div>
+      </div>`;
+    }
+
+    return banner + sections;
+  }
+
+  window.toggleScanSteps = function(id, btn) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const open = el.style.display !== 'none';
+    el.style.display = open ? 'none' : 'block';
+    if (btn) btn.textContent = open ? '📖 How to fix manually' : '📖 Hide steps';
+  };
+
+  window.runAutoFix = async function(fixCode, btnRef) {
+    if (!fixCode) return;
+    const friendlyNames = {
+      purge_expired_sessions: 'Purge expired sessions from the DB',
+      wal_checkpoint:         'Run WAL checkpoint (shrinks write-ahead log)',
+      unlock_all_accounts:    'Unlock ALL locked accounts',
+      reindex_db:             'Rebuild all DB indexes',
+      archive_old_audit:      'Archive audit-log rows older than 1 year',
+      run_backup_now:         'Trigger an immediate database backup'
+    };
+    const desc = friendlyNames[fixCode] || fixCode;
+    if (!confirm(`Auto-Fix: ${desc}\n\nProceed?`)) return;
+    const orig = btnRef ? btnRef.textContent : '';
+    if (btnRef) { btnRef.disabled = true; btnRef.textContent = '⏳ Fixing…'; }
+    try {
+      const r = await api('/api/admin-tools/scan/auto-fix', { method:'POST', body:{ fix_code: fixCode } });
+      const ok = r && r.ok;
+      const msg = (r && r.message) || (ok ? 'Done.' : 'Fix did not run.');
+      alert((ok ? '✅ ' : '⚠ ') + msg + (ok ? '\n\nRe-run the scan to verify the issue is resolved.' : ''));
+      // Auto re-run scan so the user sees the green checkmark without clicking again
+      if (ok) runSystemScan();
+    } catch(e) {
+      alert('❌ Auto-fix failed: ' + (e.message || String(e)));
+    } finally {
+      if (btnRef) { btnRef.disabled = false; btnRef.textContent = orig; }
     }
   };
 
@@ -3553,7 +4678,284 @@
           }
         }
       } catch(_) {}
+
+      // ── Overdue invoices popup (login-time reminder) ────────────────
+      try {
+        const dismissKey = 'ap-overdue-dismissed-' + todayISO();
+        if (!localStorage.getItem(dismissKey)) {
+          const r = await api('/api/billing/outstanding');
+          const overdue = (r && r.overdue) || [];
+          if (overdue.length > 0) showOverdueReminderPopup(overdue, r.overdue_amount || 0);
+        }
+      } catch(_) {}
+
+      // ── Personal reminders: badge + popup ────────────────────────────
+      try {
+        const r = await api('/api/admin-tools/reminders/due');
+        const due = (r && r.reminders) || [];
+        // Update bell badge
+        const badge = document.getElementById('rem-badge');
+        if (badge) {
+          if (due.length > 0) { badge.style.display = 'inline-block'; badge.textContent = due.length; }
+          else badge.style.display = 'none';
+        }
+        // Show popup only if not already dismissed today
+        const dismissKey = 'ap-reminders-dismissed-' + todayISO();
+        if (!localStorage.getItem(dismissKey) && due.length > 0) {
+          showPersonalRemindersPopup(due);
+        }
+      } catch(_) {}
     } catch(e) { console.error('Init failed', e); }
   })();
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // PERSONAL REMINDERS (your own to-dos, NOT client-facing)
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // Popup shown on login when user has reminders due today or earlier.
+  function showPersonalRemindersPopup(reminders) {
+    const dismissKey = 'ap-reminders-dismissed-' + todayISO();
+    const card = document.createElement('div');
+    card.id = 'personal-reminders-popup';
+    card.style.cssText = 'position:fixed; bottom:20px; left:20px; z-index:9001; max-width:420px; background:#fff; border:1px solid #c9a961; border-left:5px solid #c9a961; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:14px 16px; font-family:Calibri,sans-serif;';
+
+    const list = reminders.slice(0, 6).map(r => {
+      const priColor = { urgent:'#dc2626', high:'#d97706', normal:'#1e2761', low:'#64748b' }[r.priority] || '#1e2761';
+      const overdue = r.remind_on < todayISO();
+      const context = [r.client_name, r.matter_file_no, r.invoice_no].filter(Boolean).join(' · ');
+      return `
+        <div style="padding:8px 0;border-top:1px solid #f1f5f9;display:flex;gap:8px;align-items:flex-start;">
+          <div style="width:6px;height:6px;border-radius:50%;background:${priColor};margin-top:6px;flex-shrink:0;"></div>
+          <div style="flex:1;">
+            <div style="font-weight:600;color:#1e2761;font-size:13px;">${escapeHtml(r.title)}</div>
+            ${context ? `<div style="font-size:11px;color:#64748b;margin-top:2px;">${escapeHtml(context)}</div>` : ''}
+            <div style="font-size:11px;color:${overdue?'#dc2626':'#64748b'};margin-top:2px;">
+              ${overdue ? '⚠️ Overdue · ' : ''}Due: ${r.remind_on}
+            </div>
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0;">
+            <button onclick="markReminderDone(${r.id})" title="Mark done" style="padding:3px 8px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:4px;cursor:pointer;font-size:11px;font-weight:600;">✓</button>
+            <button onclick="snoozeReminder(${r.id})" title="Snooze 3 days" style="padding:3px 8px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:4px;cursor:pointer;font-size:11px;">⏰</button>
+          </div>
+        </div>`;
+    }).join('');
+
+    const more = reminders.length > 6 ? `<div style="font-size:11px;color:#64748b;margin-top:6px;">...and ${reminders.length - 6} more — click "View All"</div>` : '';
+
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:4px;">
+        <div style="font-weight:700;color:#1e2761;font-size:15px;">🔔 ${reminders.length} Reminder${reminders.length===1?'':'s'}</div>
+        <button onclick="document.getElementById('personal-reminders-popup').remove(); localStorage.setItem('${dismissKey}','1');" style="background:none;border:0;font-size:18px;cursor:pointer;color:#64748b;line-height:1;padding:0 4px;" title="Dismiss for today">×</button>
+      </div>
+      <div style="max-height:280px;overflow-y:auto;">${list}${more}</div>
+      <div style="display:flex;gap:6px;margin-top:10px;border-top:1px solid #e2e8f0;padding-top:10px;">
+        <button onclick="openMyReminders(); document.getElementById('personal-reminders-popup').remove();"
+          style="flex:1;padding:6px 10px;background:#1e2761;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+          View All
+        </button>
+        <button onclick="openAddReminder(); document.getElementById('personal-reminders-popup').remove();"
+          style="padding:6px 10px;background:#fef9e7;color:#92400e;border:1px solid #c9a961;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+          + Add
+        </button>
+        <button onclick="document.getElementById('personal-reminders-popup').remove(); localStorage.setItem('${dismissKey}','1');"
+          style="padding:6px 10px;background:#f1f5f9;color:#1f2937;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-size:12px;" title="Don't show again today">
+          Dismiss
+        </button>
+      </div>`;
+    document.body.appendChild(card);
+  }
+
+  // Quick actions from popup
+  window.markReminderDone = async function(id) {
+    try {
+      await api('/api/admin-tools/reminders/' + id, { method:'PATCH', body:{ status:'done' } });
+      // Remove the row from the popup
+      const popup = document.getElementById('personal-reminders-popup');
+      if (popup) popup.remove();
+      showAlert('alert', '✓ Reminder marked done.', 'success');
+    } catch(e) { showAlert('alert', e.message); }
+  };
+
+  window.snoozeReminder = async function(id) {
+    const newDate = new Date();
+    newDate.setDate(newDate.getDate() + 3);
+    const iso = newDate.toISOString().slice(0, 10);
+    try {
+      await api('/api/admin-tools/reminders/' + id, { method:'PATCH', body:{ remind_on: iso } });
+      const popup = document.getElementById('personal-reminders-popup');
+      if (popup) popup.remove();
+      showAlert('alert', '⏰ Snoozed 3 days — next reminder on ' + iso, 'success');
+    } catch(e) { showAlert('alert', e.message); }
+  };
+
+  // Modal: full list of all open reminders
+  window.openMyReminders = async function() {
+    let reminders = [];
+    try {
+      const r = await api('/api/admin-tools/reminders');
+      reminders = r.reminders || [];
+    } catch(e) { showAlert('alert', e.message); return; }
+
+    const modal = document.createElement('div');
+    modal.id = 'my-reminders-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+
+    const today = todayISO();
+    const rowsHtml = reminders.length ? reminders.map(r => {
+      const overdue = r.remind_on < today;
+      const priColor = { urgent:'#dc2626', high:'#d97706', normal:'#1e2761', low:'#64748b' }[r.priority] || '#1e2761';
+      const context = [r.client_name, r.matter_file_no, r.invoice_no].filter(Boolean).join(' · ');
+      return `
+        <tr>
+          <td style="padding:8px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${priColor};margin-right:6px;"></span>${escapeHtml(r.title)}</td>
+          <td style="padding:8px;font-size:11px;color:#64748b;">${escapeHtml(context || '—')}</td>
+          <td style="padding:8px;font-size:12px;color:${overdue?'#dc2626':'#1f2937'};white-space:nowrap;">${overdue ? '⚠️ ' : ''}${r.remind_on}</td>
+          <td style="padding:8px;text-align:right;white-space:nowrap;">
+            <button onclick="markReminderDone(${r.id})" style="padding:3px 8px;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:4px;cursor:pointer;font-size:11px;">✓ Done</button>
+            <button onclick="snoozeReminder(${r.id})" style="padding:3px 8px;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:4px;cursor:pointer;font-size:11px;">⏰ +3d</button>
+            <button onclick="deleteReminder(${r.id})" style="padding:3px 8px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:4px;cursor:pointer;font-size:11px;">🗑</button>
+          </td>
+        </tr>`;
+    }).join('') : `<tr><td colspan="4" style="padding:20px;text-align:center;color:#64748b;">No open reminders. Click "+ Add Reminder" to create one.</td></tr>`;
+
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:760px;width:92%;max-height:88vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <h3 style="margin:0;font-family:Georgia,serif;color:#1E2761;font-size:20px;">🔔 My Reminders</h3>
+          <button onclick="document.getElementById('my-reminders-modal').remove()" style="background:none;border:0;font-size:22px;cursor:pointer;color:#64748b;">×</button>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:#f8fafc;border-bottom:2px solid #e2e8f0;">
+              <th style="padding:8px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;">Title</th>
+              <th style="padding:8px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;">Context</th>
+              <th style="padding:8px;text-align:left;font-size:11px;color:#64748b;text-transform:uppercase;">Date</th>
+              <th style="padding:8px;text-align:right;font-size:11px;color:#64748b;text-transform:uppercase;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div style="margin-top:14px;display:flex;justify-content:flex-end;gap:8px;">
+          <button class="btn btn-ghost" onclick="document.getElementById('my-reminders-modal').remove()">Close</button>
+          <button class="btn btn-accent" onclick="document.getElementById('my-reminders-modal').remove(); openAddReminder();">+ Add Reminder</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  };
+
+  window.openAddReminder = function() {
+    const modal = document.createElement('div');
+    modal.id = 'add-reminder-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+    const defaultDate = tomorrow.toISOString().slice(0, 10);
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:24px;max-width:520px;width:92%;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <h3 style="margin:0 0 16px;font-family:Georgia,serif;color:#1E2761;font-size:20px;">🔔 Add Reminder</h3>
+        <div id="ar-alert" class="alert hidden" style="margin-bottom:12px;"></div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div>
+            <label style="display:block;font-weight:600;color:#1E2761;font-size:12px;margin-bottom:4px;">Title <span style="color:#dc2626;">*</span></label>
+            <input id="ar-title" type="text" placeholder="e.g. Follow up with Reliance about contract draft" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;" autocomplete="off">
+          </div>
+          <div>
+            <label style="display:block;font-weight:600;color:#1E2761;font-size:12px;margin-bottom:4px;">Notes (optional)</label>
+            <textarea id="ar-notes" rows="3" placeholder="Any details to remember..." style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;resize:vertical;font-family:inherit;"></textarea>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label style="display:block;font-weight:600;color:#1E2761;font-size:12px;margin-bottom:4px;">Remind me on <span style="color:#dc2626;">*</span></label>
+              <input id="ar-date" type="date" value="${defaultDate}" style="width:100%;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;">
+            </div>
+            <div>
+              <label style="display:block;font-weight:600;color:#1E2761;font-size:12px;margin-bottom:4px;">Priority</label>
+              <select id="ar-priority" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff;">
+                <option value="low">Low</option>
+                <option value="normal" selected>Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
+          <button class="btn btn-ghost" onclick="document.getElementById('add-reminder-modal').remove()">Cancel</button>
+          <button class="btn btn-accent" onclick="saveNewReminder()">Save Reminder</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    setTimeout(() => { const t = document.getElementById('ar-title'); if (t) t.focus(); }, 50);
+  };
+
+  window.saveNewReminder = async function() {
+    const title    = document.getElementById('ar-title').value.trim();
+    const notes    = document.getElementById('ar-notes').value.trim();
+    const remind_on = document.getElementById('ar-date').value;
+    const priority = document.getElementById('ar-priority').value;
+    if (!title)     { showAlert('ar-alert', 'Title is required'); return; }
+    if (!remind_on) { showAlert('ar-alert', 'Date is required'); return; }
+    try {
+      await api('/api/admin-tools/reminders', { method:'POST', body:{ title, notes, remind_on, priority } });
+      document.getElementById('add-reminder-modal').remove();
+      showAlert('alert', '✓ Reminder saved.', 'success');
+      // Clear today's dismiss flag so the popup shows next refresh if due
+      localStorage.removeItem('ap-reminders-dismissed-' + todayISO());
+    } catch(e) { showAlert('ar-alert', e.message); }
+  };
+
+  window.deleteReminder = async function(id) {
+    if (!confirm('Delete this reminder?')) return;
+    try {
+      await api('/api/admin-tools/reminders/' + id, { method:'DELETE' });
+      const modal = document.getElementById('my-reminders-modal');
+      if (modal) modal.remove();
+      openMyReminders();
+    } catch(e) { showAlert('alert', e.message); }
+  };
+
+  // ── Overdue Invoices Popup ────────────────────────────────────────────
+  // Floating bottom-right card showing a count + dismissible. Clicking
+  // jumps to the Outstanding tab.
+  function showOverdueReminderPopup(overdue, totalAmt) {
+    const dismissKey = 'ap-overdue-dismissed-' + todayISO();
+    const card = document.createElement('div');
+    card.id = 'overdue-popup';
+    card.style.cssText = 'position:fixed; bottom:20px; right:20px; z-index:9000; max-width:380px; background:#fff; border:1px solid #fecaca; border-left:5px solid #dc2626; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.15); padding:14px 16px; font-family:Calibri,sans-serif; animation:slideInUp .3s ease;';
+    const top3 = overdue.slice(0, 3);
+    const more = overdue.length > 3 ? `<div style="font-size:11px;color:#64748b;margin-top:4px;">...and ${overdue.length - 3} more</div>` : '';
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
+        <div style="font-weight:700;color:#991b1b;font-size:14px;">⚠️ ${overdue.length} Overdue Invoice${overdue.length===1?'':'s'}</div>
+        <button onclick="document.getElementById('overdue-popup').remove(); localStorage.setItem('${dismissKey}','1');" style="background:none;border:0;font-size:18px;cursor:pointer;color:#64748b;line-height:1;padding:0 4px;" title="Dismiss for today">×</button>
+      </div>
+      <div style="font-size:12px;color:#1f2937;margin-bottom:8px;">
+        Total outstanding: <strong>${fmtMoney(totalAmt, 'INR')}</strong>
+      </div>
+      <div style="font-size:12px;color:#374151;border-top:1px solid #fee2e2;padding-top:6px;margin-top:6px;">
+        ${top3.map(o => `
+          <div style="padding:3px 0;display:flex;justify-content:space-between;gap:8px;">
+            <span><strong>${escapeHtml(o.invoice_no)}</strong> · ${escapeHtml(o.client_name||'')}</span>
+            <span style="color:#dc2626;font-weight:600;">${fmtMoney(o.total, o.currency)}</span>
+          </div>`).join('')}
+        ${more}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        <button onclick="switchTab('tab-outstanding'); document.getElementById('overdue-popup').remove();"
+          style="flex:1;padding:6px 10px;background:#1E2761;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+          View All
+        </button>
+        <button onclick="document.getElementById('overdue-popup').remove();"
+          style="padding:6px 10px;background:#f1f5f9;color:#1f2937;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-size:12px;">
+          Snooze
+        </button>
+        <button onclick="document.getElementById('overdue-popup').remove(); localStorage.setItem('${dismissKey}','1');"
+          style="padding:6px 10px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-size:12px;" title="Don't show again today">
+          Dismiss
+        </button>
+      </div>`;
+    document.body.appendChild(card);
+  }
 
 })();

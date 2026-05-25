@@ -18,8 +18,17 @@ const Auth = {
     if (!this.token() || !u) { window.location.href = '/'; return null; }
     if (role) {
       const allowed = Array.isArray(role) ? role : [role];
-      if (!allowed.includes(u.role)) {
-        window.location.href = ['admin','billing'].includes(u.role) ? '/admin' : '/associate';
+      // Check BOTH legacy `role` text and new `role_code` so HR / partner_view
+      // / super_admin users (which map to legacy 'admin' as a placeholder) are
+      // matched correctly when an admin page allows their role_code.
+      const userRoles = [u.role, u.role_code].filter(Boolean);
+      const ok = userRoles.some(r => allowed.includes(r));
+      if (!ok) {
+        // Redirect to the most appropriate landing page
+        const adminish = ['admin','billing','hr','super_admin','partner_view'].some(r =>
+          userRoles.includes(r)
+        );
+        window.location.href = adminish ? '/admin' : '/associate';
         return null;
       }
     }

@@ -428,17 +428,46 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* modal */
 .modal-backdrop {
-  position: fixed; inset: 0; background: rgba(15, 23, 42, .65);
+  position: fixed; inset: 0; background: rgba(15, 23, 42, .55);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000; padding: 20px;
+  /* Subtle blur on the page behind the modal — gives the firm-grade polish
+     users expect from desktop SaaS, and keeps focus on the modal content. */
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: backdropFadeIn .18s ease-out;
 }
 .modal-backdrop.hidden { display: none; }
+@keyframes backdropFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .modal {
   background: #fff; border-radius: var(--radius-lg); max-width: 720px; width: 100%;
   max-height: 90vh; overflow-y: auto;
   box-shadow: 0 25px 80px rgba(20,48,74,.35);
   border-top: 3px solid var(--accent);
+  animation: modalPopIn .22s cubic-bezier(.16,1,.3,1);
 }
+@keyframes modalPopIn {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── Global polish: focus-visible for keyboard users, smoother disabled state */
+*:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+button.btn:disabled,
+button:disabled {
+  opacity: .55 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+/* Inline spinner for in-progress buttons — pair with class "is-loading" */
+.btn.is-loading { pointer-events: none; position: relative; color: transparent !important; }
+.btn.is-loading::after {
+  content: ''; position: absolute; inset: 0; margin: auto; width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.35); border-top-color: #fff; border-radius: 50%;
+  animation: btnSpin .7s linear infinite;
+}
+@keyframes btnSpin { to { transform: rotate(360deg); } }
 .modal-head { padding: 20px 26px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
 .modal-head h3 { margin: 0; font-family: var(--serif); font-size: 18px; font-weight: 600; color: var(--primary-dark); }
 .modal-head button.close { background: transparent; border: 0; font-size: 24px; color: var(--muted); cursor: pointer; line-height: 1; padding: 4px 10px; border-radius: 4px; }
@@ -446,7 +475,25 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .modal-body { padding: 24px 26px; }
 .modal-foot { padding: 16px 26px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: var(--bg); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 
-.row-actions { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; white-space: nowrap; }
+/* row-actions: ALL buttons in a single horizontal line. Never wraps. The
+   parent .table-wrap provides horizontal scroll if the table overflows the
+   viewport — preferable to wrapping, which makes scanning a row hard. */
+.row-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  white-space: nowrap;
+}
+.row-actions .btn-sm {
+  flex-shrink: 0;
+  font-size: 12.5px;   /* up from default ~11px — more readable */
+  padding: 5px 11px;
+  line-height: 1.25;
+}
+/* Slightly larger font on table body text overall for the busy data tables. */
+table.data tbody td { font-size: 13px; }
 .muted { color: var(--muted); }
 .right { text-align: right; }
 .center { text-align: center; }
@@ -1377,3 +1424,12 @@ body.associate-body {
   border-radius: 3px; transition: color .12s, background .12s;
 }
 .as-del-row:hover { color: var(--danger); background: #fbeaea; }
+
+/* Shake animation used by Compose Email's confirm popup when the user
+   clicks the backdrop — gentle nudge to use the explicit Send / Edit
+   buttons rather than dismissing the safety check accidentally. */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}

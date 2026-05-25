@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { db } = require('../utils/db');
-const { authRequired, adminOnly, writeAuditLog } = require('../middleware/auth');
+const { authRequired, adminOnly, userManagementOnly, checkRoleAssignment, writeAuditLog } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -27,8 +27,11 @@ router.get('/', authRequired, (req, res) => {
   res.json({ users: rows });
 });
 
-router.post('/', authRequired, adminOnly, (req, res) => {
-  const { email, password, full_name, role, role_id, role_code, designation, default_rate } = req.body || {};
+router.post('/', authRequired, userManagementOnly, (req, res) => {
+  const {
+    email, password, full_name, role, role_id, role_code,
+    designation, default_rate, lawyer_code, timekeeper_classification
+  } = req.body || {};
   if (!email || !password || !full_name) {
     return res.status(400).json({ error: 'email, password, full_name required' });
   }
@@ -39,19 +42,33 @@ router.post('/', authRequired, adminOnly, (req, res) => {
   if (!roleRow && role) roleRow = db.prepare('SELECT * FROM roles WHERE code = ? AND is_active = 1').get(role);
   if (!roleRow) return res.status(400).json({ error: 'Valid role / role_code / role_id required' });
 
+  // Role-assignment hierarchy check (privilege escalation prevention).
+  // Only super_admin can create super_admin / admin users.
+  const denial = checkRoleAssignment(req.user, roleRow.code);
+  if (denial) return res.status(denial.status).json({ error: denial.error });
+
   // The legacy `role` text column has a CHECK constraint allowing only
   // admin/associate/billing. For new roles (hr, partner_view, super_admin),
   // store 'admin' as a no-op placeholder; the new RBAC reads role_id only.
   const legacyRoleText = ['admin','associate','billing'].includes(roleRow.code) ? roleRow.code : 'admin';
 
+  // Validate timekeeper classification if provided (must be one of LEDES values)
+  const validClassifications = ['SENIOR_PARTNER','PARTNER','SENIOR_ASSOCIATE','ASSOCIATE','OF_COUNSEL','PARALEGAL'];
+  const tkClass = timekeeper_classification && validClassifications.includes(timekeeper_classification)
+    ? timekeeper_classification
+    : null;
+
   try {
     const hash = bcrypt.hashSync(password, 10);
     const info = db.prepare(
-      `INSERT INTO users (email, password_hash, full_name, role, role_id, designation, default_rate)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(email, hash, full_name, legacyRoleText, roleRow.id, designation || null, default_rate || 0);
+      `INSERT INTO users (email, password_hash, full_name, role, role_id, designation, default_rate,
+                          lawyer_code, timekeeper_classification)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(email.trim(), hash, full_name.trim(), legacyRoleText, roleRow.id,
+          designation || null, default_rate || 0,
+          lawyer_code || null, tkClass);
     writeAuditLog(req, 'user_create', 'user', info.lastInsertRowid,
-      `${email} (${full_name}) created with role=${roleRow.code}`);
+      `${email} (${full_name}) created with role=${roleRow.code}${tkClass ? ', classification=' + tkClass : ''}`);
     res.json({ id: info.lastInsertRowid, role: roleRow.code });
   } catch (e) {
     if (String(e).includes('UNIQUE')) return res.status(409).json({ error: 'Email already exists' });
@@ -59,10 +76,62 @@ router.post('/', authRequired, adminOnly, (req, res) => {
   }
 });
 
-router.patch('/:id', authRequired, adminOnly, (req, res) => {
+router.patch('/:id', authRequired, userManagementOnly, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const before = db.prepare('SELECT email, full_name, role_id, is_active FROM users WHERE id = ?').get(id);
   if (!before) return res.status(404).json({ error: 'User not found' });
+
+  // Role-assignment hierarchy check + legacy-column rewrite. When the caller
+  // sends `role: 'hr'` (or 'super_admin' / 'partner_view'), we cannot write
+  // that directly to the legacy `users.role` column -- it has a CHECK
+  // constraint allowing only ('admin','associate','billing'). Instead, look up
+  // the role in the `roles` table and:
+  //   1. Set `role_id` to that role's ID (this is the source of truth now).
+  //   2. Rewrite `role` (legacy) to a CHECK-safe placeholder so future PATCHes
+  //      on other columns don't fail. 'admin' is used for new roles like hr /
+  //      partner_view / super_admin since they have admin-like access patterns.
+  if ('role_id' in req.body || 'role_code' in req.body || 'role' in req.body) {
+    let targetRoleRow = null;
+    if (req.body.role_id) {
+      targetRoleRow = db.prepare('SELECT id, code FROM roles WHERE id = ? AND is_active = 1').get(req.body.role_id);
+    } else if (req.body.role_code) {
+      targetRoleRow = db.prepare('SELECT id, code FROM roles WHERE code = ? AND is_active = 1').get(req.body.role_code);
+    } else if (req.body.role) {
+      targetRoleRow = db.prepare('SELECT id, code FROM roles WHERE code = ? AND is_active = 1').get(req.body.role);
+    }
+
+    if (!targetRoleRow) {
+      return res.status(400).json({
+        error: `Unknown role: "${req.body.role || req.body.role_code || req.body.role_id}". Valid roles: super_admin, admin, billing, hr, partner_view, associate.`
+      });
+    }
+
+    // Hierarchy check (privilege escalation prevention)
+    const denial = checkRoleAssignment(req.user, targetRoleRow.code);
+    if (denial) return res.status(denial.status).json({ error: denial.error });
+
+    // Additional safety: only super_admin can MODIFY an existing super_admin or admin
+    const beforeRole = before.role_id
+      ? db.prepare('SELECT code FROM roles WHERE id = ?').get(before.role_id)
+      : null;
+    if (beforeRole && ['super_admin', 'admin'].includes(beforeRole.code)) {
+      const actorRole = req.user.role_code || req.user.role;
+      if (actorRole !== 'super_admin') {
+        return res.status(403).json({
+          error: `Only a super_admin can modify a user with role "${beforeRole.code}". This protects against unauthorised demotion.`
+        });
+      }
+    }
+
+    // Normalise req.body so the column-allowlist loop below writes the right
+    // values. Always set both `role_id` (new RBAC source of truth) and `role`
+    // (legacy CHECK-safe placeholder).
+    req.body.role_id = targetRoleRow.id;
+    req.body.role = ['admin','associate','billing'].includes(targetRoleRow.code)
+      ? targetRoleRow.code
+      : 'admin';   // hr / partner_view / super_admin → 'admin' placeholder
+    delete req.body.role_code;  // not a column; do not let it leak through
+  }
 
   // Last-admin protection: don't allow deactivating the last active super_admin.
   if ('is_active' in req.body && !req.body.is_active && before.role_id !== null) {
@@ -76,10 +145,23 @@ router.patch('/:id', authRequired, adminOnly, (req, res) => {
     }
   }
 
-  const allowed = ['full_name','role','designation','default_rate','lawyer_code','is_active','role_id'];
+  const allowed = ['full_name','role','designation','default_rate','lawyer_code','is_active','role_id','timekeeper_classification'];
+  const validClassifications = ['SENIOR_PARTNER','PARTNER','SENIOR_ASSOCIATE','ASSOCIATE','OF_COUNSEL','PARALEGAL'];
   const fields = []; const values = [];
   for (const k of allowed) {
-    if (k in req.body) { fields.push(`${k} = ?`); values.push(req.body[k]); }
+    if (k in req.body) {
+      let v = req.body[k];
+      // Validate timekeeper classification
+      if (k === 'timekeeper_classification') {
+        if (v && !validClassifications.includes(v)) {
+          return res.status(400).json({ error: `Invalid timekeeper_classification: ${v}. Must be one of: ${validClassifications.join(', ')}` });
+        }
+        if (!v) v = null;  // empty string -> NULL
+      }
+      // Auto-trim text fields
+      if (typeof v === 'string' && k !== 'designation') v = v.trim();
+      fields.push(`${k} = ?`); values.push(v);
+    }
   }
   if (req.body.password) {
     fields.push('password_hash = ?');
@@ -95,7 +177,7 @@ router.patch('/:id', authRequired, adminOnly, (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete('/:id', authRequired, adminOnly, (req, res) => {
+router.delete('/:id', authRequired, userManagementOnly, (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (id === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
   const user = db.prepare(
@@ -115,19 +197,44 @@ router.delete('/:id', authRequired, adminOnly, (req, res) => {
     if (active <= 1) return res.status(400).json({ error: 'Cannot delete the last super_admin. Promote another user first.' });
   }
 
-  // HARD-DELETE PERMANENTLY BLOCKED (per firm data-protection policy).
-  // Every "delete" request now soft-deletes only — record moves to recycle bin
-  // and can be restored by super_admin. NO API path can permanently remove
-  // a user record. This protects against accidental wipes, malicious admins,
-  // and ransomware. To purge for real, a DBA must connect directly to SQLite.
-  if (req.query.hard === 'true' || req.query.hard === '1') {
-    return res.status(403).json({
-      error: 'Hard-delete is permanently disabled. All deletions move to the recycle bin (forever retention). Contact the DBA if you need to physically purge a record.'
-    });
+  const actorRole = req.user.role_code || req.user.role;
+  const isSuperAdmin = actorRole === 'super_admin';
+  const wantsHard = req.query.hard === 'true' || req.query.hard === '1';
+
+  // ── Hard-delete branch: super_admin only.
+  //    Refuses if the user has any timesheet entries or invoices, because
+  //    those rows reference the user_id and would become orphan/NULL-FK.
+  //    Soft-delete is the right choice for users who have ever logged work.
+  if (wantsHard) {
+    if (!isSuperAdmin) {
+      return res.status(403).json({
+        error: 'Hard-delete is restricted to super_admin. Use a normal delete to send to recycle bin.'
+      });
+    }
+    if (req.query.confirm !== 'DELETE') {
+      return res.status(400).json({
+        error: 'Hard-delete requires ?confirm=DELETE on the query string to prevent accidental destruction.'
+      });
+    }
+    const tsCount = db.prepare('SELECT COUNT(*) AS c FROM timesheet_entries WHERE user_id = ?').get(id).c;
+    const invCount = db.prepare('SELECT COUNT(*) AS c FROM invoices WHERE created_by = ?').get(id).c;
+    if (tsCount > 0 || invCount > 0) {
+      return res.status(409).json({
+        error: `Cannot hard-delete: user has ${tsCount} timesheet entry(ies) and ${invCount} invoice(s) on record. Use soft-delete (recycle bin) — hard-delete would orphan financial data.`
+      });
+    }
+    const snapshot = JSON.stringify({ before: user, actor: req.user.email, at: new Date().toISOString() });
+    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    try {
+      db.prepare('INSERT INTO audit_log(user_id,action,entity,entity_id,detail) VALUES (?,?,?,?,?)').run(
+        req.user.id, 'user_hard_deleted_super_admin', 'user', id, snapshot
+      );
+    } catch(_) {}
+    return res.json({ ok: true, hard_deleted: user.full_name });
   }
 
-  // SOFT delete: move to recycle bin. Also deactivate so login stops. Preserves
-  // FK integrity for timesheet entries / invoices created by this user.
+  // ── SOFT delete: default path. Moves to recycle bin + deactivates login.
+  //    Preserves FK integrity for timesheet entries / invoices owned by this user.
   db.prepare(
     "UPDATE users SET deleted_at = datetime('now'), deleted_by = ?, is_active = 0, updated_at = datetime('now') WHERE id = ?"
   ).run(req.user.id, id);

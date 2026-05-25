@@ -86,11 +86,14 @@ router.post('/login', (req, res) => {
     return res.status(400).json({ error: 'Email & password required' });
   }
 
-  // Find user (include security fields)
+  // Find user (include security fields + role_code from joined roles table)
   const user = db.prepare(
-    `SELECT id, email, password_hash, full_name, role, designation,
-            failed_login_count, locked_until, is_active, deleted_at
-     FROM users WHERE email = ? COLLATE NOCASE`
+    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.designation,
+            u.failed_login_count, u.locked_until, u.is_active, u.deleted_at,
+            r.code AS role_code, r.name AS role_name
+     FROM users u
+     LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.email = ? COLLATE NOCASE`
   ).get(email);
 
   // Case 1: No user found
@@ -156,8 +159,13 @@ router.post('/login', (req, res) => {
   res.json({
     token,
     user: {
-      id: user.id, email: user.email, full_name: user.full_name,
-      role: user.role, designation: user.designation
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,                  // legacy text role (admin/associate/billing)
+      role_code: user.role_code,        // new RBAC role code (super_admin/hr/partner_view/etc.)
+      role_name: user.role_name,        // human-readable role name
+      designation: user.designation
     }
   });
 });
