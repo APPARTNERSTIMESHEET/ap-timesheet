@@ -278,6 +278,31 @@ CREATE TABLE IF NOT EXISTS user_permissions (
   PRIMARY KEY (user_id, permission_id)
 );
 
+-- ─── Personal reminders (per-user to-do list with popup notifications) ───
+-- Lets admins / billing / lawyers set their own reminders: "Follow up with
+-- Reliance on contract draft", "Call Anjali about partnership note", etc.
+-- A popup appears on login when any reminder is due (date <= today and not
+-- dismissed). Optionally linked to a client / matter / invoice for context.
+CREATE TABLE IF NOT EXISTS user_reminders (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title         TEXT NOT NULL,
+  notes         TEXT,
+  remind_on     TEXT NOT NULL,           -- YYYY-MM-DD when the popup should appear
+  priority      TEXT NOT NULL DEFAULT 'normal'
+                CHECK (priority IN ('low','normal','high','urgent')),
+  status        TEXT NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open','done','dismissed')),
+  -- Optional links to provide context (clicking the reminder opens that item)
+  client_id     INTEGER REFERENCES clients(id),
+  matter_id     INTEGER REFERENCES matters(id),
+  invoice_id    INTEGER REFERENCES invoices(id),
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_user_status ON user_reminders(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_reminders_remind_on   ON user_reminders(remind_on);
+
 -- ─── Security: Login attempt tracking ──────────────────────────────────────
 -- Records every login attempt (success or failure) with IP address for
 -- forensic analysis and brute-force detection. The lockout logic reads
@@ -429,6 +454,14 @@ function ensureSchema() {
     "ALTER TABLE users ADD COLUMN failed_login_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE users ADD COLUMN locked_until TEXT",   // NULL = not locked; ISO datetime = locked until
 
+    // ── Associate-logged expenses on timesheet entries ─────────────────
+    // Lawyers can attach an out-of-pocket expense (e.g., court fee, travel,
+    // courier) to a timesheet entry. Stored alongside the time entry so the
+    // billing team sees both labour and reimbursable disbursements when
+    // generating the invoice. Currency follows the matter / invoice.
+    "ALTER TABLE timesheet_entries ADD COLUMN expense_amount REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE timesheet_entries ADD COLUMN expense_description TEXT",
+
     // ── LEDES: International e-billing support ───────────────────────────
     // Timekeeper classification per LEDES standard: PARTNER, SENIOR_ASSOCIATE,
     // ASSOCIATE, OF_COUNSEL, PARALEGAL, LAW_CLERK, OTHER. Required by client
@@ -448,6 +481,13 @@ function ensureSchema() {
     // Client's matter ID (their internal code, different from our file_no).
     // Required by LEDES CLIENT_MATTER_ID field for cross-system reconciliation.
     "ALTER TABLE matters ADD COLUMN client_matter_id TEXT",
+
+    // ── GST Reverse Charge Mechanism (RCM) toggle per invoice ─────────────
+    // 1 (default) = client pays GST directly to govt; firm collects only the
+    //   service fee. Grand total = subtotal − discount.
+    // 0           = firm collects GST → grand total = subtotal − discount + tax.
+    // Existing rows backfill to 1 to preserve historical behaviour.
+    "ALTER TABLE invoices ADD COLUMN reverse_charge INTEGER NOT NULL DEFAULT 1",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column already exists — skip */ }

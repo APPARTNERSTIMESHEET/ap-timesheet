@@ -1,9 +1,9 @@
 const express = require('express');
 const { db } = require('../utils/db');
-const { authRequired, adminOnly, notifyAdminsOfBillingAction } = require('../middleware/auth');
+const { authRequired, adminOnly, superAdminOnly, notifyAdminsOfBillingAction } = require('../middleware/auth');
 const { buildInvoicePreview, createInvoice } = require('../utils/billing');
 const { streamInvoicePDF } = require('../utils/invoice-pdf');
-const { generateLEDES1998B, generateLEDES1998BI, generateLEDESXML21 } = require('../utils/ledes-export');
+const { generateLEDES1998B, generateLEDES1998BI, generateLEDESXML21, validateLEDES } = require('../utils/ledes-export');
 const { writeAuditLog } = require('../middleware/auth');
 const path = require('path');
 
@@ -51,7 +51,11 @@ router.post('/invoices', authRequired, adminOnly, (req, res) => {
       items: Array.isArray(b.items) ? b.items : null,
       discount_amount: b.discount_amount,
       discount_type:   b.discount_type,
-      discount_note:   b.discount_note || null
+      discount_note:   b.discount_note || null,
+      // Reverse charge (GST RCM) — default true (existing behaviour). If false,
+      // firm collects tax and grand total = subtotal + tax.
+      reverse_charge: (b.reverse_charge === undefined || b.reverse_charge === null) ? 1
+                      : (b.reverse_charge ? 1 : 0)
     });
     const action = b.save_as_draft ? 'Draft Invoice Saved' : 'Invoice Created';
     notifyAdminsOfBillingAction(req, action, `Invoice ${out.invoice_no} · Total: ${out.total} ${b.currency||'INR'}`);
@@ -91,8 +95,11 @@ router.post('/invoices/manual', authRequired, adminOnly, (req, res) => {
     const subtotal  = round2(items.reduce((s, i) => s + i.amount, 0));
     const taxRate   = cur !== 'INR' ? 0 : Number(b.tax_rate || 0);
     const taxAmount = round2(subtotal * (taxRate / 100));
-    // Reverse charge: total = service fee only; GST informational only
-    const total     = round2(subtotal);
+    // Reverse Charge flag — default true (existing behaviour). Yes → total = subtotal
+    // (tax payable by client directly). No → firm collects tax → total = subtotal + tax.
+    const reverseCharge = (b.reverse_charge === undefined || b.reverse_charge === null)
+                          ? 1 : (b.reverse_charge ? 1 : 0);
+    const total     = round2(reverseCharge ? subtotal : (subtotal + taxAmount));
     const invoice_no = (b.invoice_no && b.invoice_no.trim()) ? b.invoice_no.trim() : nextInvoiceNumber();
 
     const tx = db.transaction(() => {
@@ -100,14 +107,15 @@ router.post('/invoices/manual', authRequired, adminOnly, (req, res) => {
         INSERT INTO invoices
           (invoice_no, client_id, invoice_date, due_date, period_from, period_to,
            subtotal, tax_rate, tax_amount, total, currency, notes, created_by, status, tax_type,
-           state_name, state_code, firm_entity)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?)
+           state_name, state_code, firm_entity, reverse_charge)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?, ?)
       `).run(
         invoice_no, parseInt(b.client_id, 10), b.invoice_date, b.due_date || null,
         b.period_from || b.invoice_date, b.period_to || b.invoice_date,
         subtotal, taxRate, taxAmount, total, cur,
         b.notes || null, req.user.id, b.tax_type || null,
-        b.state_name || null, b.state_code || null, b.firm_entity || 'delhi'
+        b.state_name || null, b.state_code || null, b.firm_entity || 'delhi',
+        reverseCharge
       );
       const invoiceId = inv.lastInsertRowid;
       const itemStmt = db.prepare(`
@@ -131,6 +139,79 @@ router.post('/invoices/manual', authRequired, adminOnly, (req, res) => {
     console.error('Manual invoice error:', e);
     res.status(500).json({ error: e.message });
   }
+});
+
+// ─── 🛑 SUPER-ADMIN: Hard-delete an invoice ──────────────────────────────────
+// Bypasses the firm-wide no-hard-delete policy. ONLY accessible to super_admin.
+// Use cases: cleanup of test invoices, accidental duplicates, GDPR/legitimate
+// erasure requests. Removes: invoice row, invoice_items rows, ledes_exports rows.
+// Releases any timesheet entries that were linked to this invoice.
+// Preserves: audit_log entries (so the destruction itself is traceable).
+//
+// Requires body { confirm: 'DELETE', reason: '...' } to prevent accidental
+// fat-finger deletes via the API.
+router.delete('/invoices/:id', authRequired, superAdminOnly, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const b  = req.body || {};
+
+  if (b.confirm !== 'DELETE') {
+    return res.status(400).json({ error: 'Confirmation required. Send body { "confirm":"DELETE", "reason":"..." } to proceed.' });
+  }
+
+  const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
+  if (!inv) return res.status(404).json({ error: 'Invoice not found' });
+
+  // Snapshot the invoice + line items so the audit log preserves enough
+  // detail to reconstruct the deleted record if ever needed.
+  const items = db.prepare('SELECT * FROM invoice_items WHERE invoice_id = ?').all(id);
+  const snapshot = {
+    invoice: inv,
+    items,
+    deleted_by: { id: req.user.id, email: req.user.email, role: req.user.role_code },
+    deleted_at: new Date().toISOString(),
+    reason: (b.reason || '').toString().slice(0, 500) || '(no reason given)'
+  };
+
+  const tx = db.transaction(() => {
+    // Release timesheet entries linked to this invoice (back to approved/free)
+    const released = db.prepare(`
+      UPDATE timesheet_entries
+      SET status = CASE WHEN status = 'invoiced' THEN 'approved' ELSE status END,
+          invoice_id = NULL
+      WHERE invoice_id = ?
+    `).run(id).changes;
+
+    let ledesCount = 0;
+    try {
+      ledesCount = db.prepare('DELETE FROM ledes_exports WHERE invoice_id = ?').run(id).changes;
+    } catch(_) { /* table may not exist */ }
+
+    const itemCount = db.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').run(id).changes;
+    const invCount  = db.prepare('DELETE FROM invoices WHERE id = ?').run(id).changes;
+
+    // Audit BEFORE returning so the trail survives even if response is dropped.
+    try {
+      db.prepare(`
+        INSERT INTO audit_log(user_id, action, entity, entity_id, detail)
+        VALUES (?, 'invoice_hard_deleted_super_admin', 'invoice', ?, ?)
+      `).run(req.user.id, id, JSON.stringify({
+        ...snapshot,
+        counts: { items_deleted: itemCount, ledes_deleted: ledesCount, entries_released: released, invoice_deleted: invCount }
+      }));
+    } catch(_) {}
+
+    return { items: itemCount, ledes: ledesCount, entries_released: released, invoice: invCount };
+  });
+
+  const r = tx();
+  notifyAdminsOfBillingAction(req, 'Invoice HARD-DELETED (super-admin)',
+    `${inv.invoice_no} · status was ${inv.status} · total was ${inv.currency || 'INR'} ${inv.total} · reason: ${snapshot.reason}`);
+  res.json({
+    ok: true,
+    invoice_no: inv.invoice_no,
+    deleted: r,
+    message: `Invoice ${inv.invoice_no} hard-deleted. Action audit-logged.`
+  });
 });
 
 // ─── List invoices ────────────────────────────────────────────────────────────
@@ -223,12 +304,24 @@ router.patch('/invoices/:id', authRequired, adminOnly, (req, res) => {
 
   // invoice_no change is restricted to draft invoices — once issued, the number
   // is on file with the client / accounting system and must not drift.
+  // Super-admin can override via admin_override:true in body, audit-logged.
+  const actorRoleP = req.user.role_code || req.user.role;
+  const isSuperAdminP = actorRoleP === 'super_admin';
+  const overrideRequestedP = !!(req.body && req.body.admin_override);
   if (invoice_no != null && invoice_no !== '' && invoice_no !== inv.invoice_no) {
-    if (inv.status !== 'draft') {
-      return res.status(400).json({ error: 'Invoice number can only be changed while the invoice is a draft.' });
+    if (inv.status !== 'draft' && !(isSuperAdminP && overrideRequestedP)) {
+      return res.status(400).json({ error: 'Invoice number can only be changed while the invoice is a draft. Super-admin can override with admin_override:true.' });
     }
     const trimmed = String(invoice_no).trim();
     if (!trimmed) return res.status(400).json({ error: 'Invoice number cannot be blank.' });
+    if (inv.status !== 'draft' && isSuperAdminP && overrideRequestedP) {
+      try {
+        db.prepare(`
+          INSERT INTO audit_log(user_id, action, entity, entity_id, detail)
+          VALUES (?, 'invoice_no_changed_super_admin_override', 'invoice', ?, ?)
+        `).run(req.user.id, id, `${inv.invoice_no} -> ${trimmed} (status=${inv.status})`);
+      } catch(_) {}
+    }
   }
   // Review fields only make sense while invoice is a draft. Allow setting on
   // non-draft only to clear (so audit/history can be preserved when issued).
@@ -322,7 +415,30 @@ router.put('/invoices/:id/items', authRequired, adminOnly, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const inv = db.prepare('SELECT * FROM invoices WHERE id = ?').get(id);
   if (!inv) return res.status(404).json({ error: 'Not found' });
-  if (inv.status !== 'draft') return res.status(400).json({ error: 'Only draft invoices can be edited' });
+  // Standard rule: only draft invoices can be edited (preserves audit trail
+  // and matches GST Sec 31 — issued invoices must not be silently modified).
+  // Super-admin escape hatch: allows editing any invoice with heavy audit
+  // logging — for genuine correction scenarios where the firm decides this
+  // override is acceptable. Body must include admin_override:true.
+  const actorRole = req.user.role_code || req.user.role;
+  const isSuperAdmin = actorRole === 'super_admin';
+  const overrideRequested = !!(req.body && req.body.admin_override);
+  if (inv.status !== 'draft') {
+    if (!isSuperAdmin || !overrideRequested) {
+      return res.status(400).json({ error: 'Only draft invoices can be edited. Super-admin can override by passing admin_override:true.' });
+    }
+    // Audit the override before doing anything
+    try {
+      const snapshot = {
+        before: { status: inv.status, subtotal: inv.subtotal, total: inv.total, paid_at: inv.paid_at, invoice_no: inv.invoice_no },
+        reason: (req.body.override_reason || '').slice(0, 500) || '(no reason provided)'
+      };
+      db.prepare(`
+        INSERT INTO audit_log(user_id, action, entity, entity_id, detail)
+        VALUES (?, 'invoice_edit_super_admin_override', 'invoice', ?, ?)
+      `).run(req.user.id, id, JSON.stringify(snapshot));
+    } catch(_) {}
+  }
 
   const b = req.body || {};
   const items = b.items;
@@ -356,7 +472,12 @@ router.put('/invoices/:id/items', authRequired, adminOnly, (req, res) => {
   );
   const discountedSub = round2(Math.max(0, subtotal - discountValue));
   const taxAmount = round2(discountedSub * (taxRate / 100));
-  const total     = discountedSub;   // reverse charge: total = post-discount subtotal
+  // Reverse Charge flag — accept on edit if sent, else preserve invoice's current value.
+  // 1 → total = discountedSub. 0 → total = discountedSub + taxAmount.
+  const reverseChargeFlag = (b.reverse_charge === undefined || b.reverse_charge === null)
+                            ? (inv.reverse_charge == null ? 1 : inv.reverse_charge)
+                            : (b.reverse_charge ? 1 : 0);
+  const total     = round2(reverseChargeFlag ? discountedSub : (discountedSub + taxAmount));
 
   const tx = db.transaction(() => {
     // Replace all items
@@ -372,7 +493,8 @@ router.put('/invoices/:id/items', authRequired, adminOnly, (req, res) => {
     db.prepare(`
       UPDATE invoices SET subtotal = ?, tax_amount = ?, total = ?,
         tax_rate = ?, invoice_date = ?, due_date = ?, notes = ?,
-        discount_amount = ?, discount_type = ?, discount_note = ?
+        discount_amount = ?, discount_type = ?, discount_note = ?,
+        reverse_charge = ?
       WHERE id = ?
     `).run(subtotal, taxAmount, total, taxRate,
       b.invoice_date || inv.invoice_date,
@@ -380,6 +502,7 @@ router.put('/invoices/:id/items', authRequired, adminOnly, (req, res) => {
       b.notes != null ? b.notes : inv.notes,
       discountValue, dType,
       b.discount_note != null ? b.discount_note : inv.discount_note,
+      reverseChargeFlag,
       id);
   });
   tx();
@@ -539,7 +662,7 @@ router.post('/invoices/:id/issue', authRequired, adminOnly, (req, res) => {
 // ─── Email invoice ────────────────────────────────────────────────────────────
 router.post('/invoices/:id/email', authRequired, adminOnly, async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const { to } = req.body || {};
+  const { to, cc, subject: customSubject, body: customBody } = req.body || {};
   if (!to) return res.status(400).json({ error: 'Recipient email (to) required' });
 
   const inv = db.prepare(`
@@ -578,12 +701,21 @@ router.post('/invoices/:id/email', authRequired, adminOnly, async (req, res) => 
       auth: { user: smtpUser, pass: smtpPass }
     });
 
+    // Use admin-supplied subject + body if provided (from Compose Email modal),
+    // otherwise fall back to the default invoice template.
+    const subjectLine = (customSubject && customSubject.trim())
+      ? customSubject.trim()
+      : `Invoice ${inv.invoice_no} from AP & Partners`;
+    const textBody = (customBody && customBody.trim())
+      ? customBody
+      : `Dear Client,\n\nPlease find attached invoice ${inv.invoice_no} for ${inv.client_name}.\nAmount: ${inv.currency} ${Number(inv.total).toLocaleString('en-IN', {minimumFractionDigits:2})}\n\nThank you for your business.\n\nAP & Partners\naccounts@appartners.in\nTel: +91 124 4891670`;
+
     await transporter.sendMail({
       from: `"AP & Partners" <${smtpFrom}>`,
       to,
-      subject: `Invoice ${inv.invoice_no} from AP & Partners`,
-      text: `Dear Client,\n\nPlease find attached invoice ${inv.invoice_no} for ${inv.client_name}.\nAmount: ${inv.currency} ${Number(inv.total).toLocaleString('en-IN', {minimumFractionDigits:2})}\n\nThank you for your business.\n\nAP & Partners, Advocates\naccounts@appartners.in\nTel: +91 124 4891670`,
-      html: `<p>Dear Client,</p><p>Please find attached invoice <strong>${inv.invoice_no}</strong> for ${inv.client_name}.</p><p><strong>Amount: ${inv.currency} ${Number(inv.total).toLocaleString('en-IN', {minimumFractionDigits:2})}</strong></p><p>Thank you for your business.</p><hr><small>AP & Partners, Advocates | accounts@appartners.in | Tel: +91 124 4891670</small>`,
+      cc: (cc && String(cc).trim()) ? String(cc).trim() : undefined,
+      subject: subjectLine,
+      text: textBody,
       attachments: [{ filename: `${inv.invoice_no}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
     });
 
@@ -710,21 +842,27 @@ router.get('/invoices/:id/export-ledes', authRequired, (req, res) => {
   const inv = db.prepare('SELECT id, invoice_no, total, currency FROM invoices WHERE id = ?').get(invoiceId);
   if (!inv) return res.status(404).json({ error: 'Invoice not found' });
 
+  // Optional ?style=short uses Tymetrix-style abbreviated field names
+  // (e.g., LINE_ITEM_UNITS instead of LINE_ITEM_NUMBER_OF_UNITS). Required
+  // by some validators (ledesshield.com) and certain client platforms.
+  const style = (req.query.style || 'official').toLowerCase();
+  const exportOpts = { style: style === 'short' ? 'short' : 'official' };
+
   let content, ext, mime;
   try {
     switch (format) {
       case '1998B':
-        content = generateLEDES1998B(invoiceId);
+        content = generateLEDES1998B(invoiceId, exportOpts);
         ext = 'txt'; mime = 'text/plain';
         break;
       case '1998BI':
       case 'INTERNATIONAL':
-        content = generateLEDES1998BI(invoiceId);
+        content = generateLEDES1998BI(invoiceId, exportOpts);
         ext = 'txt'; mime = 'text/plain';
         break;
       case 'XML-2.1':
       case 'XML':
-        content = generateLEDESXML21(invoiceId);
+        content = generateLEDESXML21(invoiceId, exportOpts);
         ext = 'xml'; mime = 'application/xml';
         break;
       default:
@@ -750,10 +888,41 @@ router.get('/invoices/:id/export-ledes', authRequired, (req, res) => {
   writeAuditLog(req, 'LEDES_EXPORT', 'invoice', invoiceId,
     `Format=${format}, lines=${lineItemCount}, total=${inv.currency || 'INR'} ${inv.total}`);
 
-  res.setHeader('Content-Type', mime + '; charset=utf-8');
+  // LEDES 1998B and 1998BI are strict 7-bit ASCII formats per spec. XML 2.0/2.1
+  // is UTF-8. Set charset accordingly so picky parsers (ledesshield.com etc.)
+  // accept the response. Content has already been sanitised to ASCII by
+  // toAscii() in escapePipes — sending as us-ascii is safe.
+  const charset = /^xml/i.test(format) ? 'utf-8' : 'us-ascii';
+  res.setHeader('Content-Type', mime + '; charset=' + charset);
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
   res.setHeader('X-LEDES-Format', format);
-  res.send(content);
+  // For non-XML LEDES, write the buffer as pure ASCII bytes so no UTF-8
+  // multi-byte sequences accidentally leak through if upstream sanitising
+  // missed something. Buffer.from('ascii') drops the high bit on each char.
+  if (charset === 'us-ascii') {
+    res.send(Buffer.from(content, 'ascii'));
+  } else {
+    res.send(content);
+  }
+});
+
+// ─── LEDES Pre-Export Validation ─────────────────────────────────────────────
+// Runs all sanity checks BEFORE generating the file so the billing team
+// can fix issues without wasting a submission slot with the client.
+// Returns ok=true if safe to export, plus errors[] (blocking) and warnings[].
+router.get('/invoices/:id/validate-ledes', authRequired, (req, res) => {
+  const role = req.user.role_code || req.user.role;
+  if (!['admin', 'super_admin', 'billing'].includes(role)) {
+    return res.status(403).json({ error: 'Admin/billing only' });
+  }
+  const invoiceId = parseInt(req.params.id, 10);
+  const format = (req.query.format || '1998BI').toUpperCase();
+  try {
+    const result = validateLEDES(invoiceId, format);
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ ok: false, errors: [{ code: 'SERVER_ERROR', msg: e.message }] });
+  }
 });
 
 // ─── LEDES Export History ────────────────────────────────────────────────────

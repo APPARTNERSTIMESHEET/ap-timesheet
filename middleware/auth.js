@@ -125,6 +125,82 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// ── User-management privilege gate (stricter than adminOnly) ─────────────────
+// Only super_admin and admin can manage users (create/update/delete + change
+// roles). Billing and HR roles are explicitly EXCLUDED -- billing should not
+// be able to escalate themselves or others to admin/super_admin, which would
+// be a classic privilege escalation. HR can manage employee profiles via
+// leaves/wfh modules but not core user records.
+const USER_MGMT_ROLES = ['admin', 'super_admin'];
+
+// ── super-admin-only gate (strictest tier) ──────────────────────────────────
+// For destructive / compliance-sensitive actions that should NEVER be available
+// to anyone except the firm's super-admin: hard-deleting invoices, editing
+// already-issued/paid invoices, etc. Use sparingly.
+function superAdminOnly(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
+  const r = req.user.role_code || req.user.role;
+  if (r !== 'super_admin') {
+    return res.status(403).json({
+      error: 'This action is restricted to super-admin only. It bypasses standard compliance guards (issued/paid invoice locking, no-hard-delete policy) and is audit-logged with a before/after snapshot.'
+    });
+  }
+  next();
+}
+
+function userManagementOnly(req, res, next) {
+  if (!req.user) return res.status(403).json({ error: 'Not authenticated' });
+  const r = req.user.role_code || req.user.role;
+  if (!USER_MGMT_ROLES.includes(r)) {
+    return res.status(403).json({
+      error: 'User management is restricted to admin and super_admin only. Your role is not authorised for this action.'
+    });
+  }
+  next();
+}
+
+// ── Role-assignment hierarchy check ──────────────────────────────────────────
+// Enforces the rule:
+//   - Only super_admin can assign super_admin role to any user.
+//   - Only super_admin can assign admin role (prevents admins from creating
+//     more admins without super_admin oversight).
+//   - admin/super_admin can assign all OTHER roles (billing/hr/associate/etc).
+//
+// Returns null if allowed, or an error object { status, error } if blocked.
+function checkRoleAssignment(actor, targetRoleCode) {
+  if (!targetRoleCode) return null;  // no role change requested
+  const actorRole = actor.role_code || actor.role;
+
+  // super_admin role: only super_admin can assign
+  if (targetRoleCode === 'super_admin') {
+    if (actorRole !== 'super_admin') {
+      return {
+        status: 403,
+        error: 'Only a super_admin can assign the super_admin role. This protects against privilege escalation.'
+      };
+    }
+  }
+  // admin role: only super_admin can assign (admins cannot create more admins)
+  else if (targetRoleCode === 'admin') {
+    if (actorRole !== 'super_admin') {
+      return {
+        status: 403,
+        error: 'Only a super_admin can assign the admin role.'
+      };
+    }
+  }
+  // Other roles (billing/hr/partner_view/associate): admin or super_admin
+  else {
+    if (!['admin', 'super_admin'].includes(actorRole)) {
+      return {
+        status: 403,
+        error: `Only admin or super_admin can assign roles. Your current role is "${actorRole}".`
+      };
+    }
+  }
+  return null;
+}
+
 // ── NEW: Permission-based gate ───────────────────────────────────────────────
 // Use this instead of adminOnly for any new route. Accepts one permission code
 // or an array of permission codes; passes if the user has at least one of them.
@@ -193,40 +269,20 @@ function writeAuditLog(actorOrUserId, action, entity, entityId, detail) {
 function notifyAdminsOfBillingAction(req, action, detail, entity, entityId) {
   if (!req.user) return;
 
-  // Always write to audit log regardless of role. Passing `req` rather than
-  // just the user id so the enriched logger captures name/email/impersonator.
+  // Always write to audit log -- this is the silent paper trail. The actor's
+  // name, email, IP, and impersonator (if any) are captured by writeAuditLog.
   writeAuditLog(req, action, entity || 'invoice', entityId || null, detail);
 
-  // Email notification only for billing role (admin actions are self-supervised).
-  // Honor either the new role code or the legacy `role` column.
-  const role = req.user.role_code || req.user.role;
-  if (role !== 'billing') return;
-  try {
-    const { db } = require('../utils/db');
-    const admins = db.prepare("SELECT email FROM users WHERE role='admin' AND is_active=1").all();
-    if (!admins.length) return;
-    let nodemailer;
-    try { nodemailer = require('nodemailer'); } catch(e) { return; }
-    const smtpHost = process.env.SMTP_HOST, smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    if (!smtpHost || !smtpUser || !smtpPass) return;
-    const transporter = nodemailer.createTransport({
-      host: smtpHost, port: parseInt(process.env.SMTP_PORT||'587'),
-      secure: false, requireTLS: true, tls: { rejectUnauthorized: false },
-      auth: { user: smtpUser, pass: smtpPass }
-    });
-    const toList = admins.map(a => a.email).join(', ');
-    transporter.sendMail({
-      from: `"AP & Partners System" <${process.env.SMTP_FROM || smtpUser}>`,
-      to: toList,
-      subject: `[Billing] ${action} — by ${req.user.full_name || req.user.email}`,
-      text: `Billing user ${req.user.full_name || req.user.email} performed:\n\n${action}\nDetail: ${detail}\n\nTime: ${new Date().toLocaleString('en-IN')}\n\nLog in to the admin panel to review or undo this action.`
-    }).catch(() => {});
-  } catch(e) {}
+  // AUTOMATIC email notifications are DISABLED per firm policy. The audit log
+  // captures everything for review, and admins explicitly compose email
+  // notifications via the "📧 Notify" button when they actually want one sent.
+  // (Previous behaviour sent an email to every admin on every billing action,
+  // which produced inbox spam and could not be turned off per-user.)
+  return;
 }
 
 module.exports = {
-  signToken, authRequired, adminOnly,
+  signToken, authRequired, adminOnly, userManagementOnly, superAdminOnly, checkRoleAssignment,
   requirePermission, userHas, loadUserPermissions,
   notifyAdminsOfBillingAction, writeAuditLog,
   JWT_SECRET

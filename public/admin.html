@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin — AP &amp; Partners</title>
-  <link rel="stylesheet" href="/css/styles.css?v=20260521-ledes2">
+  <link rel="stylesheet" href="/css/styles.css?v=20260525-oneline">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 </head>
@@ -122,6 +122,13 @@
                 <option value="inter_state">Inter-state — IGST only</option>
               </select>
             </div>
+            <div class="form-row">
+              <label>Reverse Charge Applicable? <span style="font-size:10px;color:var(--muted);font-weight:400;">(GST RCM)</span></label>
+              <select id="bi-reverse-charge" onchange="biEdRecalcTotals()">
+                <option value="yes" selected>Yes — Tax payable by client directly</option>
+                <option value="no">No — Firm collects tax (normal billing)</option>
+              </select>
+            </div>
             <div class="form-row"><label>Tax rate % <span style="font-size:10px;color:var(--muted);font-weight:400;" id="bi-tax-hint">(GST)</span></label><input type="number" step="0.01" id="bi-tax" value="18"></div>
             <div class="form-row"><label>Invoice No. <span style="font-size:10px;color:var(--muted);font-weight:400;">(blank = auto-generate)</span></label><input type="text" id="bi-inv-no" placeholder="e.g. AP/2026/0042"></div>
             <div class="form-row"><label>Discount <span style="font-size:10px;color:var(--muted);font-weight:400;">(optional)</span></label>
@@ -188,6 +195,13 @@
                 <option value="inter_state">Inter-state — IGST only</option>
               </select>
             </div>
+            <div class="form-row">
+              <label>Reverse Charge Applicable? <span style="font-size:10px;color:var(--muted);font-weight:400;">(GST RCM)</span></label>
+              <select id="mi-reverse-charge" onchange="miRecalc()">
+                <option value="yes" selected>Yes — Tax payable by client directly</option>
+                <option value="no">No — Firm collects tax (normal billing)</option>
+              </select>
+            </div>
             <div class="form-row"><label>Tax rate % <span style="font-size:10px;color:var(--muted);font-weight:400;" id="mi-tax-hint">(GST)</span></label><input type="number" step="0.01" id="mi-tax" value="18"></div>
             <div class="form-row full"><label>Notes</label><input id="mi-notes" placeholder="e.g. As per retainer agreement dated..."></div>
           </div>
@@ -239,28 +253,47 @@
       </div>
 
       <div id="stab-invoices" class="subtab-panel">
-        <div class="card">
-          <div class="card-title">
-            Invoices
-            <span class="actions">
-              <select id="inv-filter-status" onchange="loadInvoices()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
-                <option value="">All status</option>
-                <option value="issued">Issued</option>
-                <option value="paid">Paid</option>
-                <option value="overdue">Overdue</option>
-                <option value="draft">Draft</option>
-                <option value="cancelled">Cancelled</option>
-              </select>
-              <select id="inv-filter-review" onchange="loadInvoices()" title="Filter drafts by review stage" style="padding:5px 10px;font-size:12px;border:1px solid var(--border-strong);border-radius:var(--radius);">
-                <option value="">All review stages</option>
-                <option value="unassigned">📝 Drafts (no stage set)</option>
-                <option value="drafting">🟡 Drafting</option>
-                <option value="sent_for_review">📤 Sent for Review</option>
-                <option value="revisions_pending">✏ Revisions Pending</option>
-                <option value="ready_to_issue">✅ Ready to Issue</option>
-              </select>
-              <button class="btn btn-sm" onclick="loadInvoices()">↻ Refresh</button>
-            </span>
+
+        <!-- Slim KPI strip (single horizontal row, color-coded left border) -->
+        <div id="inv-kpis" style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:12px;"></div>
+
+        <div class="card" style="padding:0;">
+          <!-- Compact toolbar — flex with wrap so on narrow screens controls
+               wrap to a 2nd line (still horizontal in each line) instead of
+               showing a scrollbar or stacking vertically.
+               Each control has a fixed-ish width so all fit in 1 line on
+               desktop (~1400px+) and 2 lines on smaller screens. -->
+          <div class="inv-toolbar" style="display:flex !important; flex-wrap:wrap !important; gap:6px; align-items:center; padding:10px 14px; background:#fff; border-bottom:1px solid #e2e8f0;">
+            <strong style="color:#1E2761;font-size:15px;margin-right:6px;">Invoices</strong>
+            <input id="inv-search" type="text" placeholder="🔍 Search..."
+              oninput="onInvSearchInput()"
+              style="width:180px; padding:5px 10px; font-size:12px; border:1px solid var(--border-strong); border-radius:var(--radius);">
+            <select id="inv-filter-status" onchange="loadInvoices()"
+              style="width:110px; padding:5px 8px; font-size:12px; border:1px solid var(--border-strong); border-radius:var(--radius); background:#fff;">
+              <option value="">All status</option>
+              <option value="issued">Issued</option>
+              <option value="paid">Paid</option>
+              <option value="overdue">Overdue</option>
+              <option value="draft">Draft</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <select id="inv-filter-review" onchange="loadInvoices()" title="Filter drafts by review stage"
+              style="width:150px; padding:5px 8px; font-size:12px; border:1px solid var(--border-strong); border-radius:var(--radius); background:#fff;">
+              <option value="">All review stages</option>
+              <option value="unassigned">📝 No stage</option>
+              <option value="drafting">🟡 Drafting</option>
+              <option value="sent_for_review">📤 Review</option>
+              <option value="revisions_pending">✏ Revisions</option>
+              <option value="ready_to_issue">✅ Ready</option>
+            </select>
+            <input id="inv-from" type="date" onchange="loadInvoices()" title="From date"
+              style="width:130px; padding:4px 8px; font-size:12px; border:1px solid var(--border-strong); border-radius:var(--radius);">
+            <span style="color:#94a3b8;font-size:11px;">to</span>
+            <input id="inv-to" type="date" onchange="loadInvoices()" title="To date"
+              style="width:130px; padding:4px 8px; font-size:12px; border:1px solid var(--border-strong); border-radius:var(--radius);">
+            <button class="btn btn-sm btn-ghost" onclick="exportInvoicesExcel()" title="Download as Excel">📊 Excel</button>
+            <button class="btn btn-sm btn-ghost" onclick="openComposeEmail()" title="Compose email">📧 Email</button>
+            <button class="btn btn-sm" onclick="loadInvoices()">↻ Refresh</button>
           </div>
           <div id="invoices-table" class="table-wrap"></div>
         </div>
@@ -917,10 +950,16 @@
       <!-- Scan card -->
       <div class="card" style="margin:14px;">
         <div class="card-title">
-          🔍 System Scan
-          <span class="actions"><button class="btn btn-sm btn-accent" onclick="runSystemScan(this)">▶ Run Scan</button></span>
+          🔍 System & Security Scan
+          <span class="actions"><button class="btn btn-sm btn-accent" onclick="runSystemScan(this)">▶ Run Full Scan</button></span>
         </div>
-        <p class="card-subtitle">DB integrity check + foreign-key validation + orphan record detection + backup freshness. Run this before issuing important invoices or on weekly maintenance.</p>
+        <p class="card-subtitle">
+          Comprehensive health check: DB integrity, foreign keys, orphan records, backup freshness,
+          JWT secret strength, default-password detection, .env protection, WAL bloat, expired sessions,
+          audit-log retention, and brute-force monitoring. Each issue shows a severity badge plus an
+          <strong>Auto-Fix</strong> button (where safe) and step-by-step <strong>manual repair</strong> instructions.
+          Run weekly or before issuing important invoices.
+        </p>
         <div id="sa-scan-result"></div>
       </div>
     </div>
@@ -1039,6 +1078,20 @@
 
         <button class="btn btn-sm btn-ghost" onclick="edAddRow()" style="margin-bottom:16px;">+ Add line</button>
 
+        <!-- Reverse Charge toggle (GST RCM). Changing this updates the totals
+             below and the saved invoice's reverse_charge column on Save. -->
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+          <div style="min-width:280px;display:flex;align-items:center;gap:10px;">
+            <label class="form-label" style="margin:0;white-space:nowrap;">Reverse Charge?
+              <span style="font-size:10px;color:var(--muted);font-weight:400;">(GST RCM)</span>
+            </label>
+            <select class="form-control" id="ed-reverse-charge" onchange="edRecalc()" style="flex:1;">
+              <option value="yes" selected>Yes — Tax payable by client directly</option>
+              <option value="no">No — Firm collects tax</option>
+            </select>
+          </div>
+        </div>
+
         <div style="display:flex;justify-content:flex-end;">
           <table style="font-size:13px;min-width:260px;border-collapse:collapse;">
             <tr>
@@ -1066,7 +1119,7 @@
   </div>
 
   <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
-  <script src="/js/common.js?v=20260521-ledes2"></script>
-  <script src="/js/admin.js?v=20260521-ledes2"></script>
+  <script src="/js/common.js?v=20260525-oneline"></script>
+  <script src="/js/admin.js?v=20260525-oneline"></script>
 </body>
 </html>

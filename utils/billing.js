@@ -112,6 +112,59 @@ function buildInvoicePreview({ client_id, from, to }) {
     }
   }
 
+  // ─── Out-of-pocket expenses logged by associates ──────────────────────
+  // Associates can log per-entry expenses (court fee, taxi, courier, etc.)
+  // via the popup on the timesheet grid. Collect them here as SEPARATE line
+  // items grouped by (matter, description) — they're disbursements, not fees,
+  // so they appear distinctly on the invoice (and map to UTBMS E-codes on LEDES).
+  const expenseRows = db.prepare(`
+    SELECT t.matter_id, t.user_id, t.entry_date, t.expense_amount, t.expense_description,
+           m.file_no, m.title AS matter_title
+    FROM timesheet_entries t
+    JOIN matters m ON m.id = t.matter_id
+    WHERE t.client_id = ?
+      AND t.status NOT IN ('rejected','invoiced')
+      AND t.invoice_id IS NULL
+      AND t.entry_date BETWEEN ? AND ?
+      AND t.expense_amount IS NOT NULL
+      AND t.expense_amount > 0
+    ORDER BY t.entry_date, t.id
+  `).all(client_id, from, to);
+
+  // Group expenses by (matter_id, description) so multiple "Court fee" entries
+  // for the same matter become one line item with total amount + count.
+  const expenseGroups = new Map();
+  for (const r of expenseRows) {
+    const key = `${r.matter_id}::${(r.expense_description || 'Expense').toLowerCase()}`;
+    if (!expenseGroups.has(key)) {
+      expenseGroups.set(key, {
+        matter_id: r.matter_id,
+        file_no: r.file_no,
+        matter_title: r.matter_title,
+        description: r.expense_description || 'Expense',
+        total: 0,
+        count: 0
+      });
+    }
+    const g = expenseGroups.get(key);
+    g.total += Number(r.expense_amount) || 0;
+    g.count += 1;
+  }
+
+  for (const g of expenseGroups.values()) {
+    items.push({
+      matter_id: g.matter_id,
+      user_id: null,    // expenses aren't tied to a single lawyer
+      description: `${g.file_no} — ${g.matter_title} • ${g.description}${g.count > 1 ? ' (×' + g.count + ')' : ''}`,
+      quantity: 1,
+      unit: 'lot',
+      rate: round2(g.total),
+      amount: round2(g.total),
+      source_entry_ids: [],   // expenses aren't 1:1 with single entries here
+      is_expense: true        // marker so the UI / PDF can style it differently
+    });
+  }
+
   const subtotal = round2(items.reduce((s, i) => s + i.amount, 0));
   return { items, subtotal };
 }
@@ -143,7 +196,7 @@ function nextInvoiceNumber() {
  * fx_rate: how many INR = 1 foreign currency unit (e.g. 84.50 means 1 USD = 84.50 INR)
  * save_as_draft: if true, invoice status = 'draft'; entries get invoice_id but remain 'approved'
  */
-function createInvoice({ client_id, invoice_date, due_date, period_from, period_to, tax_rate, notes, currency, fx_rate, tax_type, firm_entity, save_as_draft, created_by, invoice_no: customInvoiceNo, items: customItems, discount_amount, discount_type, discount_note }) {
+function createInvoice({ client_id, invoice_date, due_date, period_from, period_to, tax_rate, notes, currency, fx_rate, tax_type, firm_entity, save_as_draft, created_by, invoice_no: customInvoiceNo, items: customItems, discount_amount, discount_type, discount_note, reverse_charge }) {
   // Two modes:
   //   1. customItems provided  → user edited the preview before issuing. Use
   //      exactly what they sent (already in destination currency — front-end
@@ -203,9 +256,12 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
   // discount represents a price reduction agreed with the client.
   const taxRate   = cur !== 'INR' ? 0 : (tax_rate == null ? 0 : Number(tax_rate));
   const taxAmount = round2(discountedSub * (taxRate / 100));
-  // Reverse charge: firm collects only the (discounted) service fee. GST is
-  // paid by the business entity directly to govt — informational on the PDF.
-  const total     = discountedSub;
+  // Reverse Charge (GST RCM) toggle — default true (legacy behaviour).
+  //   Yes → firm bills only the (discounted) service fee; client pays GST to govt.
+  //   No  → firm collects GST → total = discounted subtotal + tax.
+  const reverseChargeFlag = (reverse_charge === undefined || reverse_charge === null)
+                            ? 1 : (reverse_charge ? 1 : 0);
+  const total     = round2(reverseChargeFlag ? discountedSub : (discountedSub + taxAmount));
   // Allow caller (admin) to override the auto-generated number. Blank/undefined
   // falls back to the next sequence. UNIQUE constraint on invoice_no will
   // surface a clear 409 at the route layer if the caller picked a duplicate.
@@ -219,8 +275,8 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
       INSERT INTO invoices
         (invoice_no, client_id, invoice_date, due_date, period_from, period_to,
          subtotal, tax_rate, tax_amount, total, currency, notes, created_by, status, tax_type, firm_entity,
-         discount_amount, discount_type, discount_note)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         discount_amount, discount_type, discount_note, reverse_charge)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_no, client_id, invoice_date, due_date || null,
       period_from, period_to,
@@ -230,7 +286,8 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
       invStatus,
       tax_type || null,
       firm_entity || 'delhi',
-      discountValue, dType, discount_note || null
+      discountValue, dType, discount_note || null,
+      reverseChargeFlag
     );
     const invoiceId = inv.lastInsertRowid;
 

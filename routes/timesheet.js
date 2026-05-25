@@ -105,15 +105,25 @@ router.post('/', authRequired, upload.single('file'), (req, res) => {
   const isBillable = (b.is_billable === undefined || b.is_billable === null)
                      ? 1 : (b.is_billable === '0' || b.is_billable === false || b.is_billable === 'false' ? 0 : 1);
 
+  // Optional per-entry expense (e.g., court fee, travel). Stored alongside the
+  // time entry so the billing team can see both labour + reimbursable
+  // disbursements when generating the invoice for the matter.
+  const expenseAmount = b.expense_amount != null && !isNaN(parseFloat(b.expense_amount))
+    ? Math.max(0, parseFloat(b.expense_amount))
+    : 0;
+  const expenseDescription = b.expense_description || null;
+
   const info = db.prepare(`
     INSERT INTO timesheet_entries
       (user_id, client_id, matter_id, entry_date, start_time, end_time, hours,
-       activity_type, description, notes, is_billable, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       activity_type, description, notes, is_billable, status,
+       expense_amount, expense_description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     userId, b.client_id, b.matter_id, b.entry_date,
     b.start_time || null, b.end_time || null, hours,
-    b.activity_type, b.description, b.notes || null, isBillable, status
+    b.activity_type, b.description, b.notes || null, isBillable, status,
+    expenseAmount, expenseDescription
   );
 
   if (req.file) {
@@ -140,7 +150,8 @@ router.patch('/:id', authRequired, upload.single('file'), (req, res) => {
 
   const b = req.body || {};
   const allowed = ['client_id','matter_id','entry_date','start_time','end_time','hours',
-                   'activity_type','description','notes','is_billable','status','rate_override'];
+                   'activity_type','description','notes','is_billable','status','rate_override',
+                   'expense_amount','expense_description'];
   // recompute hours if start/end changed but hours not
   if ((b.start_time || b.end_time) && b.hours == null) {
     const s = b.start_time ?? entry.start_time;
@@ -154,6 +165,7 @@ router.patch('/:id', authRequired, upload.single('file'), (req, res) => {
       let v = b[k];
       if (k === 'is_billable') v = (v === '0' || v === false || v === 'false') ? 0 : 1;
       if (k === 'rate_override') v = (v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? null : parseFloat(v);
+      if (k === 'expense_amount') v = (v === '' || v === null || v === undefined || isNaN(parseFloat(v))) ? 0 : Math.max(0, parseFloat(v));
       fields.push(`${k} = ?`); values.push(v);
     }
   }

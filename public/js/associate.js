@@ -192,14 +192,20 @@
       var isToday = iso === toISO(new Date());
       var cls = 'as-day-cell' + (isWknd ? ' as-col-wknd' : '') + (isToday ? ' as-col-today' : '') + (locked ? ' as-locked' : '');
 
-      // Store cell narration/billable from loaded data
+      // Store cell narration, billable, AND expense data from loaded entry.
+      // Without this, an associate's saved expense disappears from the UI on
+      // page reload even though it's safely in the database.
       if (!cellData[rId][di]) cellData[rId][di] = {};
       if (dayD) {
-        cellData[rId][di].narration = dayD.description || '';
-        cellData[rId][di].billable  = dayD.is_billable !== 0;
+        cellData[rId][di].narration            = dayD.description || '';
+        cellData[rId][di].billable             = dayD.is_billable !== 0;
+        cellData[rId][di].expense              = dayD.expense_amount > 0 ? String(dayD.expense_amount) : '';
+        cellData[rId][di].expense_description  = dayD.expense_description || '';
       } else {
-        cellData[rId][di].narration = '';
-        cellData[rId][di].billable  = true;
+        cellData[rId][di].narration            = '';
+        cellData[rId][di].billable             = true;
+        cellData[rId][di].expense              = '';
+        cellData[rId][di].expense_description  = '';
       }
 
       dayCells += '<td class="' + cls + '" data-date="' + iso + '">';
@@ -224,6 +230,23 @@
       dayCells;
 
     document.getElementById('week-grid-body').appendChild(tr);
+
+    // Restore visual indicators on cells that have saved expenses or narration
+    for (var di2 = 0; di2 < 7; di2++) {
+      var cdEntry = cellData[rId][di2];
+      if (!cdEntry) continue;
+      var inpEl = tr.querySelector('input[data-row="' + rId + '"][data-day="' + di2 + '"]');
+      if (!inpEl) continue;
+      // Tooltip combining narration + expense info
+      var toolParts = [];
+      if (cdEntry.narration) toolParts.push(cdEntry.narration);
+      if (parseFloat(cdEntry.expense) > 0) {
+        toolParts.push('💰 ₹' + cdEntry.expense + (cdEntry.expense_description ? ' — ' + cdEntry.expense_description : ''));
+        // Green inset border at bottom signals "this cell also has an expense logged"
+        inpEl.style.boxShadow = 'inset 0 -3px 0 #16a34a';
+      }
+      if (toolParts.length) inpEl.title = toolParts.join('\n');
+    }
   }
 
   window.addEmptyRow = function() { buildRow(null, getWeekDays(currentWeekStart)); updateTotals(); };
@@ -350,12 +373,70 @@
   };
   window.openExpPopup = function() {
     var menu = document.getElementById('as-ctx-menu'); if (menu) menu.classList.remove('open');
-    var exp = prompt('Enter expense amount (₹):', (cellData[_ctxRow] && cellData[_ctxRow][_ctxDay] && cellData[_ctxRow][_ctxDay].expense) || '');
-    if (exp !== null) {
-      if (!cellData[_ctxRow]) cellData[_ctxRow] = {};
-      if (!cellData[_ctxRow][_ctxDay]) cellData[_ctxRow][_ctxDay] = {};
-      cellData[_ctxRow][_ctxDay].expense = exp;
-    }
+    if (_ctxRow === null || _ctxDay === null) return;
+    if (!cellData[_ctxRow]) cellData[_ctxRow] = {};
+    if (!cellData[_ctxRow][_ctxDay]) cellData[_ctxRow][_ctxDay] = {};
+    var cd = cellData[_ctxRow][_ctxDay];
+
+    // Replace browser prompt() with a proper modal so we can capture BOTH
+    // the amount AND a short description (e.g., "Court fee for hearing").
+    var existing = document.getElementById('as-exp-overlay');
+    if (existing) existing.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'as-exp-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    overlay.innerHTML =
+      '<div style="background:#fff;border-radius:8px;padding:22px;max-width:440px;width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.2);">' +
+        '<h3 style="margin:0 0 6px;font-family:Georgia,serif;color:#1E2761;font-size:18px;">💰 Add Expense</h3>' +
+        '<p style="font-size:12px;color:#64748b;margin:0 0 16px;">Out-of-pocket cost (court fee, courier, travel, etc.) for this matter on this day.</p>' +
+        '<div style="margin-bottom:12px;">' +
+          '<label style="display:block;font-weight:600;font-size:12px;color:#1E2761;margin-bottom:4px;">Amount (₹)</label>' +
+          '<input type="number" step="0.01" min="0" id="exp-amount" value="' + (cd.expense || '') + '" placeholder="e.g. 2500" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;">' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' +
+          '<label style="display:block;font-weight:600;font-size:12px;color:#1E2761;margin-bottom:4px;">What is this for? <span style="color:#64748b;font-weight:400;">(short description)</span></label>' +
+          '<input type="text" id="exp-desc" value="' + ((cd.expense_description || '').replace(/"/g,'&quot;')) + '" placeholder="e.g. Court fee for hearing" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:14px;">' +
+        '</div>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+          '<button id="exp-clear" style="padding:6px 12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-size:13px;">Clear</button>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<button id="exp-cancel" style="padding:8px 14px;background:#f1f5f9;color:#1E2761;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+            '<button id="exp-save" style="padding:8px 16px;background:#1E2761;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;">Save</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+
+    var close = function() { overlay.remove(); };
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+    document.getElementById('exp-cancel').onclick = close;
+    document.getElementById('exp-clear').onclick = function() {
+      cd.expense = '';
+      cd.expense_description = '';
+      // Remove expense indicator from cell
+      var inp = document.querySelector('input[data-row="' + _ctxRow + '"][data-day="' + _ctxDay + '"]');
+      if (inp) inp.style.boxShadow = '';
+      close();
+    };
+    document.getElementById('exp-save').onclick = function() {
+      var amt = parseFloat(document.getElementById('exp-amount').value) || 0;
+      var desc = document.getElementById('exp-desc').value.trim();
+      if (amt < 0) { alert('Expense amount cannot be negative'); return; }
+      cd.expense = amt > 0 ? String(amt) : '';
+      cd.expense_description = desc || '';
+      // Add a subtle green inset-shadow to the cell as a visual indicator
+      var inp = document.querySelector('input[data-row="' + _ctxRow + '"][data-day="' + _ctxDay + '"]');
+      if (inp) {
+        inp.style.boxShadow = amt > 0 ? 'inset 0 -3px 0 #16a34a' : '';
+        inp.title = (inp.title || '') + (amt > 0 ? '\n💰 Expense: ₹' + amt + (desc ? ' — ' + desc : '') : '');
+      }
+      close();
+    };
+    setTimeout(function() {
+      var inp = document.getElementById('exp-amount');
+      if (inp) inp.focus();
+    }, 50);
   };
   window.closeNarrPopup = function() {
     var overlay = document.getElementById('as-narr-overlay');
@@ -366,10 +447,18 @@
     if (!cellData[_ctxRow]) cellData[_ctxRow] = {};
     if (!cellData[_ctxRow][_ctxDay]) cellData[_ctxRow][_ctxDay] = {};
     var ta = document.getElementById('narr-text');
-    cellData[_ctxRow][_ctxDay].narration = ta ? ta.value.trim() : '';
-    // Show indicator dot on cell
+    var narr = ta ? ta.value.trim() : '';
+    cellData[_ctxRow][_ctxDay].narration = narr;
+    // Show indicator on cell + clear red error highlight (entered narration)
     var inp = document.querySelector('input[data-row="' + _ctxRow + '"][data-day="' + _ctxDay + '"]');
-    if (inp && cellData[_ctxRow][_ctxDay].narration) inp.title = cellData[_ctxRow][_ctxDay].narration;
+    if (inp) {
+      inp.title = narr || '';
+      if (narr) {
+        // Clear red error from validation
+        inp.style.borderColor = '';
+        inp.style.background = '';
+      }
+    }
     closeNarrPopup();
   };
 
@@ -384,6 +473,9 @@
     }
 
     var ops = [];
+    var missingNarrations = [];   // {row, day, dateLabel} for cells with time but no narration
+    var DAY_NAMES_FULL = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
     document.querySelectorAll('#week-grid-body tr').forEach(function(tr) {
       var rId = parseInt(tr.dataset.rowId);
       var cSel = tr.querySelector('.as-col-client .as-sel');
@@ -397,26 +489,76 @@
         if (!inp || inp.disabled) continue;
         var hrs = parseHHMM(inp.value);
         if (hrs <= 0) continue;
+
         var dateISO = toISO(days[d]);
         var cd = (cellData[rId] && cellData[rId][d]) ? cellData[rId][d] : {};
-        var narr = cd.narration || (act + ' – ' + (mSel.options[mSel.selectedIndex] ? mSel.options[mSel.selectedIndex].text : ''));
+
+        // ★ MANDATORY NARRATION: if user filled time but didn't write a narration,
+        // refuse to save. Auto-generated default ("Drafting – Matter X") is no
+        // longer accepted as professional billing requires a lawyer-written
+        // description of work performed.
+        var narrText = (cd.narration || '').trim();
+        if (!narrText) {
+          missingNarrations.push({
+            row: rId,
+            day: d,
+            label: DAY_NAMES_FULL[d] + ' ' + days[d].getDate() + ' (' + (mSel.options[mSel.selectedIndex] ? mSel.options[mSel.selectedIndex].text : 'Matter') + ')'
+          });
+          // Highlight the offending cell so the user can spot it
+          inp.style.borderColor = '#dc2626';
+          inp.style.background = '#fee2e2';
+          continue;
+        }
+        // Clear any prior red highlight on cells that now pass validation
+        inp.style.borderColor = '';
+        inp.style.background = '';
+
         var billable = cd.billable !== false ? 1 : 0;
         var key = cid + '|' + mid + '|' + act + '|' + dateISO;
         var existing = existMap.get(key);
         if (existing && existing.status === 'invoiced') continue;
+        // Out-of-pocket expense logged by the lawyer for this matter on this
+        // day (e.g., court fee, courier, taxi). Saved with the time entry so
+        // billing sees both labour + disbursements when invoicing.
+        var expenseAmt = parseFloat(cd.expense) || 0;
+        if (expenseAmt < 0) expenseAmt = 0;
+        var expenseDesc = (cd.expense_description || '').trim() || null;
+
         if (existing) {
           ops.push(api('/api/timesheet/' + existing.id, { method:'PATCH', body:{
-            hours: hrs, status: status, description: narr, is_billable: billable
+            hours: hrs, status: status, description: narrText, is_billable: billable,
+            expense_amount: expenseAmt, expense_description: expenseDesc
           }}));
         } else {
           ops.push(api('/api/timesheet', { method:'POST', body:{
             entry_date: dateISO, client_id: cid, matter_id: mid,
-            activity_type: act, hours: hrs, description: narr,
-            is_billable: billable, status: status
+            activity_type: act, hours: hrs, description: narrText,
+            is_billable: billable, status: status,
+            expense_amount: expenseAmt, expense_description: expenseDesc
           }}));
         }
       }
     });
+
+    // Hard-fail if any cell with time has no narration. Show which cells need it.
+    if (missingNarrations.length > 0) {
+      var list = missingNarrations.slice(0, 5).map(function(m) { return '• ' + m.label; }).join('<br>');
+      var more = missingNarrations.length > 5 ? '<br><em>...and ' + (missingNarrations.length - 5) + ' more</em>' : '';
+      showAlert('alert',
+        '<strong>Narration required</strong><br>' +
+        missingNarrations.length + ' cell(s) have time logged but no description. ' +
+        'Click each red-highlighted cell and add a description of work performed before saving.<br><br>' +
+        list + more,
+        'error');
+      // Scroll the first offending cell into view
+      var first = missingNarrations[0];
+      var firstInp = document.querySelector('input[data-row="' + first.row + '"][data-day="' + first.day + '"]');
+      if (firstInp) {
+        firstInp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        firstInp.focus();
+      }
+      return;
+    }
 
     if (!ops.length) { showAlert('alert', 'No hours entered. Fill in the grid first.', 'warning'); return; }
     try {

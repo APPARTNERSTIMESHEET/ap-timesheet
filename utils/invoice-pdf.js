@@ -139,6 +139,11 @@ function mainPage(doc, inv, items, currency, isDraft) {
   const sub    = Number(inv.subtotal || 0);
   const totTax = Number(inv.tax_amount || 0);
   const tot    = Number(inv.total || sub);
+  // GST Reverse Charge flag — default true for older invoices that pre-date
+  // the column. When true, firm bills only the service fee; client pays tax
+  // directly. When false, firm collects tax → grand total = netSub + totTax.
+  const reverseCharge = (inv.reverse_charge === undefined || inv.reverse_charge === null)
+                        ? true : !!Number(inv.reverse_charge);
 
   // Discount applied at invoice level (flat ₹ or percent of subtotal). The
   // stored discount_amount is always the absolute ₹ value (computed at save
@@ -403,7 +408,7 @@ function mainPage(doc, inv, items, currency, isDraft) {
     doc.font('Helvetica').fontSize(9).fillColor('#555')
        .text('Reverse Charge applicable', sumLblX+6, y+4, {width: sumLblW-8, lineBreak:false});
     doc.font('Helvetica-Bold').fontSize(9.5).fillColor('#000')
-       .text('YES', sumRateX+2, y+4, {width: sumRateW-4, align:'center', lineBreak:false});
+       .text(reverseCharge ? 'YES' : 'NO', sumRateX+2, y+4, {width: sumRateW-4, align:'center', lineBreak:false});
     doc.fillColor('#000'); y += rh;
   }
 
@@ -436,9 +441,20 @@ function mainPage(doc, inv, items, currency, isDraft) {
     gstRow('Add: CGST', fmtRate(cgstRate), cgstAmt>0 ? fmtAmt(cgstAmt) : '-');
     gstRow('Add: SGST', fmtRate(sgstRate), sgstAmt>0 ? fmtAmt(sgstAmt) : '-');
     gstRow('Add: IGST', fmtRate(igstRate), igstAmt>0 ? fmtAmt(igstAmt) : '-');
-    totalGSTRow('Total GST payable on Reverse Charge (See Note)', fmtAmt(totTax));
-    // Reverse charge: the firm only collects the (post-discount) service fee.
-    svcRow('Total Value of Services after tax', fmtAmt(netSub), true, '#1c3d5a');
+    totalGSTRow(
+      reverseCharge
+        ? 'Total GST payable on Reverse Charge (See Note)'
+        : 'Total GST (collected by firm)',
+      fmtAmt(totTax)
+    );
+    // Reverse charge ON  → firm collects only the (post-discount) service fee.
+    // Reverse charge OFF → firm collects fee + GST → grand total = netSub + totTax.
+    const grandINR = reverseCharge ? netSub : (netSub + totTax);
+    svcRow(
+      reverseCharge ? 'Total Value of Services after tax' : 'Total Amount Payable',
+      fmtAmt(grandINR),
+      true, '#1c3d5a'
+    );
   } else {
     if (hasDiscount) {
       svcRow('Gross Fees for Legal Services for the month of '+periodLabel(inv.period_from), fmtAmt(sub), false);
@@ -489,11 +505,19 @@ function mainPage(doc, inv, items, currency, isDraft) {
 
   // ── GST Note ──────────────────────────────────────────────────────────────
   if (isINR) {
-    doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#333')
-       .text('Note — GST (CGST / SGST / IGST):', L, y); y += 12;
-    doc.font('Helvetica').fontSize(8.5).fillColor('#555')
-       .text('The Government has notified that the entire GST on legal services supplied by an advocate to a business entity shall be paid under Reverse Charge Mechanism by the recipient. Please pay this tax accordingly.',
-             L, y, {width: W});
+    if (reverseCharge) {
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#333')
+         .text('Note — GST (CGST / SGST / IGST):', L, y); y += 12;
+      doc.font('Helvetica').fontSize(8.5).fillColor('#555')
+         .text('The Government has notified that the entire GST on legal services supplied by an advocate to a business entity shall be paid under Reverse Charge Mechanism by the recipient. Please pay this tax accordingly.',
+               L, y, {width: W});
+    } else {
+      doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#333')
+         .text('Note — GST:', L, y); y += 12;
+      doc.font('Helvetica').fontSize(8.5).fillColor('#555')
+         .text('GST is collected by the firm and will be deposited with the Government as per applicable rules. The Total Amount Payable above is inclusive of all applicable taxes.',
+               L, y, {width: W});
+    }
     y = doc.y + 10;
   }
 

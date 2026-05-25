@@ -142,15 +142,49 @@
 
     /* Alert */
     .alert {
-      padding: 11px 14px;
-      border-radius: 6px;
+      padding: 12px 14px;
+      border-radius: 7px;
       font-size: 13px;
       margin-bottom: 18px;
-      border-left: 3px solid #c0392b;
+      border-left: 4px solid #c0392b;
       background: #fdf2f2;
       color: #8b1a1a;
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      line-height: 1.45;
+      font-weight: 500;
+      animation: alertFadeIn .25s ease-out;
+    }
+    .alert::before {
+      content: '⚠';
+      flex: 0 0 auto;
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1;
+      margin-top: 1px;
     }
     .alert.hidden { display: none; }
+    @keyframes alertFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Error state on inputs — pairs with the alert above */
+    .form-group input.error {
+      border-color: #c0392b !important;
+      background: #fdf2f2 !important;
+      box-shadow: 0 0 0 3px rgba(192,57,43,.10);
+    }
+
+    /* Shake the card briefly on a failed login so the error is unmissable */
+    .card.shake { animation: cardShake .42s cubic-bezier(.36,.07,.19,.97); }
+    @keyframes cardShake {
+      10%, 90% { transform: translateX(-1px); }
+      20%, 80% { transform: translateX(2px); }
+      30%, 50%, 70% { transform: translateX(-4px); }
+      40%, 60% { transform: translateX(4px); }
+    }
 
     /* Button */
     .btn-submit {
@@ -270,8 +304,46 @@
     })();
 
     const ADMIN_PANEL_ROLES = ['admin', 'billing'];
+
+    // Custom alert shower for login — overrides the 5-second auto-hide from
+    // common.js so the user has time to read & retry. Also handles shake +
+    // input red highlight + auto-focus to password field for fast retry.
+    function showLoginError(msg) {
+      const el = document.getElementById('alert');
+      el.classList.remove('hidden');
+      el.textContent = msg;
+      // Add red border on both inputs so it's obvious which fields to retry.
+      document.getElementById('email').classList.add('error');
+      document.getElementById('password').classList.add('error');
+      // Shake the card so the failure is unmissable.
+      const card = document.querySelector('.card');
+      card.classList.remove('shake');
+      // Force a reflow so the animation re-runs even if the same class was just removed.
+      void card.offsetWidth;
+      card.classList.add('shake');
+      // Clear the password and focus it for a quick retry — most common case
+      // is a typo, not a wrong email.
+      const pw = document.getElementById('password');
+      pw.value = '';
+      pw.focus();
+    }
+
+    function clearLoginError() {
+      const el = document.getElementById('alert');
+      el.classList.add('hidden');
+      el.textContent = '';
+      document.getElementById('email').classList.remove('error');
+      document.getElementById('password').classList.remove('error');
+    }
+
+    // Clear the red error styling the moment the user starts editing either
+    // field — keeps the form feeling responsive after a failed attempt.
+    document.getElementById('email').addEventListener('input', clearLoginError);
+    document.getElementById('password').addEventListener('input', clearLoginError);
+
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
+      clearLoginError();
       const email    = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
       const btn      = document.getElementById('login-btn');
@@ -281,7 +353,18 @@
         Auth.setSession(res.token, res.user);
         location.href = ADMIN_PANEL_ROLES.includes(res.user.role) ? '/admin' : '/associate';
       } catch (err) {
-        showAlert('alert', err.message);
+        // The backend already returns "Invalid credentials" (with optional
+        // attempts-remaining or lockout suffix) without revealing whether
+        // the email exists. We pass that through verbatim because the lockout
+        // duration is genuinely useful info. For everything else (network
+        // errors, etc.), show a generic friendly message.
+        const raw = (err && err.message) || '';
+        const friendly = /invalid credentials/i.test(raw)
+          ? raw.replace(/^invalid credentials/i, 'Email or password is incorrect')
+          : /locked/i.test(raw)
+            ? raw
+            : raw || 'Could not sign in. Please check your connection and try again.';
+        showLoginError(friendly);
       } finally {
         btn.disabled = false; btn.textContent = 'Sign in';
       }
