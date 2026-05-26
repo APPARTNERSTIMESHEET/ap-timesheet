@@ -1,0 +1,69 @@
+{
+  "expo": {
+    "name": "AP FocusLock",
+    "slug": "ap-focuslock",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1a1a2e"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "com.appartners.focuslock",
+      "permissions": [
+        "CAMERA",
+        "READ_CONTACTS",
+        "CALL_PHONE",
+        "RECEIVE_BOOT_COMPLETED",
+        "FOREGROUND_SERVICE",
+        "VIBRATE",
+        "USE_BIOMETRIC",
+        "USE_FINGERPRINT",
+        "READ_MEDIA_IMAGES",
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE",
+        "SCHEDULE_EXACT_ALARM",
+        "POST_NOTIFICATIONS",
+        "WAKE_LOCK",
+        "SYSTEM_ALERT_WINDOW"
+      ],
+      "versionCode": 1
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Intruder detection ke liye camera access chahiye"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": ["./assets/notification.wav"]
+        }
+      ],
+      "expo-task-manager",
+      "expo-background-fetch",
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Call schedule karne ke liye contacts access chahiye"
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Intruder photos save karne ke liye",
+          "savePhotosPermission": "Intruder photos save karne ke liye"
+        }
+      ]
+    ]
+  }
+}

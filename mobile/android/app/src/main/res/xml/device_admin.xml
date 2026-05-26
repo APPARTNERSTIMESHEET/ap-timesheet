@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- Screen lock permission for Focus Mode -->
+        <force-lock />
+        <!-- Password policy to detect wrong attempts -->
+        <watch-login />
+        <!-- Reset password (optional, for strict focus lock) -->
+        <reset-password />
+    </uses-policies>
+</device-admin>
