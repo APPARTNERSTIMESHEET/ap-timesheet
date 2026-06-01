@@ -262,6 +262,32 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
   const reverseChargeFlag = (reverse_charge === undefined || reverse_charge === null)
                             ? 1 : (reverse_charge ? 1 : 0);
   const total     = round2(reverseChargeFlag ? discountedSub : (discountedSub + taxAmount));
+
+  // ── TDS calculation (Indian B2B clients) ───────────────────────────
+  // Read client's TDS configuration. If applicable, deduct TDS from the
+  // grand total to show the NET amount the client will actually remit.
+  // The firm still books the full `total` as revenue; tds_amount is a
+  // receivable from the IT Department (claimed via Form 26AS).
+  // TDS only applies to INR invoices (foreign clients don't deduct Indian TDS).
+  let tdsApplicable = 0, tdsRate = 0, tdsAmount = 0, tdsSection = null;
+  let netReceivable = total;
+  if (cur === 'INR') {
+    try {
+      const clientRow = db.prepare(
+        'SELECT tds_applicable, tds_rate, tds_section FROM clients WHERE id = ?'
+      ).get(client_id);
+      if (clientRow && clientRow.tds_applicable) {
+        tdsApplicable = 1;
+        tdsRate = Number(clientRow.tds_rate) || 10;
+        tdsSection = clientRow.tds_section || '194J';
+        // TDS is computed on the PRE-TAX value (discounted subtotal) per
+        // IT Dept rules — not on total including GST.
+        tdsAmount = round2(discountedSub * (tdsRate / 100));
+        netReceivable = round2(total - tdsAmount);
+      }
+    } catch (_) { /* TDS columns might not exist yet on legacy schemas */ }
+  }
+
   // Allow caller (admin) to override the auto-generated number. Blank/undefined
   // falls back to the next sequence. UNIQUE constraint on invoice_no will
   // surface a clear 409 at the route layer if the caller picked a duplicate.
@@ -275,8 +301,9 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
       INSERT INTO invoices
         (invoice_no, client_id, invoice_date, due_date, period_from, period_to,
          subtotal, tax_rate, tax_amount, total, currency, notes, created_by, status, tax_type, firm_entity,
-         discount_amount, discount_type, discount_note, reverse_charge)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         discount_amount, discount_type, discount_note, reverse_charge,
+         tds_applicable, tds_rate, tds_amount, tds_section, net_receivable)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       invoice_no, client_id, invoice_date, due_date || null,
       period_from, period_to,
@@ -287,7 +314,8 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
       tax_type || null,
       firm_entity || 'delhi',
       discountValue, dType, discount_note || null,
-      reverseChargeFlag
+      reverseChargeFlag,
+      tdsApplicable, tdsRate, tdsAmount, tdsSection, netReceivable
     );
     const invoiceId = inv.lastInsertRowid;
 
@@ -323,6 +351,8 @@ function createInvoice({ client_id, invoice_date, due_date, period_from, period_
     id: invoiceId, invoice_no, subtotal,
     discount_amount: discountValue, discount_type: dType, discount_note: discount_note || null,
     tax_amount: taxAmount, total,
+    tds_applicable: tdsApplicable, tds_rate: tdsRate, tds_amount: tdsAmount,
+    tds_section: tdsSection, net_receivable: netReceivable,
     items: workingItems
   };
 }

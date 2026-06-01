@@ -850,26 +850,81 @@ router.post('/scan', authRequired, requirePermission('system.settings'), (req, r
     ] : []
   });
 
-  // 8. .env file protections — should not be world-readable. On Windows we
-  //    can read the basename's existence; deeper ACL checks require icacls.
-  //    We surface this as a warning with manual steps regardless.
+  // 8. .env file protections — actually inspect the Windows ACLs via icacls
+  //    instead of just checking file existence. The previous version always
+  //    warned because .env exists; this version only warns if the ACL grants
+  //    access to broad groups (BUILTIN\Users or Authenticated Users).
+  //    SAFE owners: NT AUTHORITY\SYSTEM (PM2 daemon) + BUILTIN\Administrators
+  //    + the maintainer's own user account.
   const envPath = path.resolve(__dirname, '..', '.env');
   const envExists = fs.existsSync(envPath);
-  add({
-    name: '.env file protection',
-    category: 'security',
-    severity: envExists ? 'warning' : 'info',
-    ok: !envExists,   // ok=true if not present (e.g. using OS env vars); manual review otherwise
-    detail: envExists
-      ? `.env exists at ${envPath}. Verify ACLs restrict it to SYSTEM + the service account only.`
-      : 'No .env file present (env vars set elsewhere). No exposure risk.',
-    manual_steps: envExists ? [
-      'Open elevated PowerShell',
-      'Run: icacls .env /inheritance:r',
-      'Run: icacls .env /grant:r SYSTEM:F "%USERNAME%:R"',
-      'Verify: icacls .env — only SYSTEM and your service account should appear'
-    ] : []
-  });
+  if (!envExists) {
+    add({
+      name: '.env file protection',
+      category: 'security',
+      severity: 'info',
+      ok: true,
+      detail: 'No .env file present (env vars set elsewhere). No exposure risk.',
+      manual_steps: []
+    });
+  } else {
+    // Parse icacls output. Permissive entries look like:
+    //   BUILTIN\Users:(RX)
+    //   NT AUTHORITY\Authenticated Users:(M)
+    //   Everyone:(R)
+    // Safe entries: NT AUTHORITY\SYSTEM, BUILTIN\Administrators, specific user accounts.
+    let aclDetail = 'Could not inspect ACLs (icacls unavailable).';
+    let aclSafe   = false;
+    let broadGroups = [];
+    try {
+      const { execSync } = require('child_process');
+      const out = execSync(`icacls "${envPath}"`, { encoding: 'utf8', timeout: 5000 });
+      // Each line after the file path is one ACE entry. Strip the file-path
+      // header and the trailing "Successfully processed" line.
+      const aceLines = out.split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l && !/^Successfully processed/i.test(l) && !/Failed processing/i.test(l));
+      const broadPatterns = [
+        /BUILTIN\\Users\b/i,
+        /\bAuthenticated Users\b/i,
+        /\bEveryone\b/i,
+        /\bINTERACTIVE\b/i,
+        /\bNETWORK\b/i
+      ];
+      for (const line of aceLines) {
+        for (const pat of broadPatterns) {
+          if (pat.test(line)) {
+            broadGroups.push(line.split(':')[0].trim());
+            break;
+          }
+        }
+      }
+      if (broadGroups.length === 0) {
+        aclSafe = true;
+        aclDetail = `ACLs locked down — only SYSTEM, Administrators, and named user have access (${aceLines.length} ACE entr${aceLines.length === 1 ? 'y' : 'ies'}).`;
+      } else {
+        aclDetail = `.env grants access to broad group(s): ${[...new Set(broadGroups)].join(', ')}. Anyone logged into this machine can read your JWT secret / DB path / SMTP credentials.`;
+      }
+    } catch (e) {
+      aclDetail = `.env exists at ${envPath}. Could not inspect ACLs automatically (${(e.message || '').slice(0, 100)}). Verify manually.`;
+    }
+    add({
+      name: '.env file protection',
+      category: 'security',
+      severity: aclSafe ? 'info' : 'warning',
+      ok: aclSafe,
+      detail: aclDetail,
+      manual_steps: aclSafe ? [] : [
+        'Open elevated PowerShell, cd to C:\\ap-timesheet',
+        'icacls .env /inheritance:r',
+        'icacls .env /remove "BUILTIN\\Users"',
+        'icacls .env /remove "NT AUTHORITY\\Authenticated Users"',
+        'icacls .env /grant:r SYSTEM:F',
+        'icacls .env /grant:r "$($env:USERNAME):R"',
+        'icacls .env  (verify only SYSTEM + Administrators + your user remain)'
+      ]
+    });
+  }
 
   // 9. Expired sessions cluttering the table — sessions past their expires_at
   //    waste DB space. Easy to auto-fix.

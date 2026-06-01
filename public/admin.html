@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin — AP &amp; Partners</title>
-  <link rel="stylesheet" href="/css/styles.css?v=20260525-oneline">
+  <link rel="stylesheet" href="/css/styles.css?v=20260527-2fa">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 </head>
@@ -326,6 +326,7 @@
         <button class="subtab-btn active" data-stab="stab-rp-hours">Hours Summary</button>
         <button class="subtab-btn" data-stab="stab-rp-util">Utilization</button>
         <button class="subtab-btn" data-stab="stab-rp-profit">Matter Profitability</button>
+        <button class="subtab-btn" data-stab="stab-rp-tds">💸 TDS Report</button>
       </div>
 
       <div id="stab-rp-hours" class="subtab-panel active">
@@ -370,6 +371,53 @@
             <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadProfitability()">Run</button></div>
           </div>
           <div id="profit-out" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <!-- ══════ TDS REPORT ══════
+           Indian B2B clients deduct TDS at payment time. This report aggregates
+           the TDS shown on invoices issued in the chosen period — used at year-
+           end to reconcile against Form 26AS from the IT Department. -->
+      <div id="stab-rp-tds" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">
+            💸 TDS Receivable Report
+            <span class="actions">
+              <button class="btn btn-sm btn-ghost" onclick="exportTDSReportExcel()">📊 Export Excel</button>
+            </span>
+          </div>
+          <p class="card-subtitle">
+            Indian B2B clients deduct TDS at payment time and remit it to the IT Dept.
+            Year-end mein Form 26AS download karke is report ke saath cross-check karo
+            — TDS receivable claim ke liye sara data yahan hai.
+          </p>
+
+          <div class="form-grid cols-4">
+            <div class="form-row">
+              <label>From (Financial Year start)</label>
+              <input type="date" id="tds-from">
+            </div>
+            <div class="form-row">
+              <label>To (Financial Year end)</label>
+              <input type="date" id="tds-to">
+            </div>
+            <div class="form-row">
+              <label>Client (optional)</label>
+              <select id="tds-client"><option value="">All clients</option></select>
+            </div>
+            <div class="form-row" style="align-items:flex-end;">
+              <button class="btn btn-accent" onclick="loadTDSReport()">▶ Run Report</button>
+            </div>
+          </div>
+
+          <!-- Summary KPIs -->
+          <div id="tds-kpis" class="kpi-grid" style="margin-top:14px;"></div>
+
+          <!-- By-client + by-section breakdown tables -->
+          <div id="tds-breakdown" style="margin-top:14px;"></div>
+
+          <!-- Invoice-level detail table -->
+          <div id="tds-invoices" style="margin-top:14px;"></div>
         </div>
       </div>
     </section>
@@ -1119,7 +1167,7 @@
   </div>
 
   <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
-  <script src="/js/common.js?v=20260525-oneline"></script>
-  <script src="/js/admin.js?v=20260525-oneline"></script>
+  <script src="/js/common.js?v=20260527-2fa"></script>
+  <script src="/js/admin.js?v=20260527-2fa"></script>
 </body>
 </html>

@@ -488,6 +488,40 @@ function ensureSchema() {
     // 0           = firm collects GST → grand total = subtotal − discount + tax.
     // Existing rows backfill to 1 to preserve historical behaviour.
     "ALTER TABLE invoices ADD COLUMN reverse_charge INTEGER NOT NULL DEFAULT 1",
+
+    // ── TDS (Tax Deducted at Source) — Indian B2B clients deduct TDS at
+    // payment time and remit it to the IT Dept on the firm's behalf. We need
+    // to (a) track per-client TDS applicability + rate + section, and (b)
+    // record the TDS amount + net receivable on each invoice for Form 26AS
+    // reconciliation at year-end.
+    //
+    // Common TDS sections for a law firm:
+    //   194J (Professional/Technical fees) - 10%   ← default for legal work
+    //   194C (Contractual)                  - 1-2%
+    //   194I (Rent)                          - 10%
+    //   194Q (Purchase of goods)             - 0.1%
+    "ALTER TABLE clients  ADD COLUMN tds_applicable  INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE clients  ADD COLUMN tds_rate        REAL    NOT NULL DEFAULT 10",
+    "ALTER TABLE clients  ADD COLUMN tds_section     TEXT             DEFAULT '194J'",
+    "ALTER TABLE invoices ADD COLUMN tds_applicable  INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE invoices ADD COLUMN tds_rate        REAL    NOT NULL DEFAULT 0",
+    "ALTER TABLE invoices ADD COLUMN tds_amount      REAL    NOT NULL DEFAULT 0",
+    "ALTER TABLE invoices ADD COLUMN tds_section     TEXT",
+    "ALTER TABLE invoices ADD COLUMN net_receivable  REAL    NOT NULL DEFAULT 0",
+
+    // ── 2FA / TOTP support on users ─────────────────────────────────────
+    "ALTER TABLE users ADD COLUMN totp_secret        TEXT",
+    "ALTER TABLE users ADD COLUMN totp_enabled       INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN totp_backup_codes  TEXT",
+    "ALTER TABLE users ADD COLUMN totp_enrolled_at   TEXT",
+
+    // ── Per-user panel access override ─────────────────────────────────
+    // CSV of tab IDs (e.g. "tab-billing,tab-outstanding,tab-reports") the
+    // user is allowed to see, overriding the default set from their role.
+    // NULL / empty → use the role's default tab list (existing behaviour).
+    // Lets super-admin restrict an "Accounts" person to ONLY billing tabs,
+    // or grant a Billing user temporary access to Timesheets, etc.
+    "ALTER TABLE users ADD COLUMN allowed_tabs TEXT",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column already exists — skip */ }

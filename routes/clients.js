@@ -17,18 +17,23 @@ router.get('/', authRequired, (req, res) => {
 router.post('/', authRequired, adminOnly, (req, res) => {
   const { code, name, contact_person, email, phone, gstin, address, state_name, state_code,
           kind_attn, ref_text, default_currency,
-          client_internal_id, requires_ledes, ledes_format } = req.body || {};
+          client_internal_id, requires_ledes, ledes_format,
+          tds_applicable, tds_rate, tds_section } = req.body || {};
   if (!name) return res.status(400).json({ error: 'Client name required' });
   // Auto-trim whitespace to prevent " Vensure " kind of issues
   const cleanName = String(name).trim();
   const info = db.prepare(
     `INSERT INTO clients (code, name, contact_person, email, phone, gstin, address, state_name, state_code,
                           kind_attn, ref_text, default_currency,
-                          client_internal_id, requires_ledes, ledes_format)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+                          client_internal_id, requires_ledes, ledes_format,
+                          tds_applicable, tds_rate, tds_section)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(code || null, cleanName, contact_person || null, email || null, phone || null, gstin || null, address || null,
         state_name || null, state_code || null, kind_attn || null, ref_text || null, default_currency || null,
-        client_internal_id || null, requires_ledes ? 1 : 0, ledes_format || null);
+        client_internal_id || null, requires_ledes ? 1 : 0, ledes_format || null,
+        tds_applicable ? 1 : 0,
+        (tds_rate != null && tds_rate !== '') ? Number(tds_rate) : 10,
+        tds_section || '194J');
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -36,7 +41,8 @@ router.patch('/:id', authRequired, adminOnly, (req, res) => {
   const id = parseInt(req.params.id, 10);
   const allowed = ['code','name','contact_person','email','phone','gstin','address','is_active',
                    'state_name','state_code','kind_attn','ref_text','default_currency',
-                   'client_internal_id','requires_ledes','ledes_format'];
+                   'client_internal_id','requires_ledes','ledes_format',
+                   'tds_applicable','tds_rate','tds_section'];
   const fields = []; const values = [];
   for (const k of allowed) if (k in req.body) {
     // Auto-trim text fields to prevent trailing whitespace

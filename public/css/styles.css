@@ -299,22 +299,55 @@ button[disabled], .btn[disabled] { opacity: .5; cursor: not-allowed; transform: 
 /* tables */
 .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: #fff; }
 table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.data th, table.data td { padding: 13px 16px; text-align: left; border-bottom: 1px solid var(--border); }
-table.data thead th {
-  background: var(--bg-alt); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; font-size: 10.5px; letter-spacing: .8px;
-  border-bottom: 2px solid var(--border-strong);
+/* Uniform row height across the entire table.
+   The Status column's tallest content (DRAFT pill + Ready-to-Issue
+   sub-badge, stacked) needs ~78px of vertical space. We set 80px as the
+   MIN height on every cell so rows with shorter content (single pill,
+   simple text) still fill the same vertical band — no more uneven dividers. */
+table.data th, table.data td {
+  padding: 12px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e4ecf7;
+  vertical-align: middle;
+  height: 80px;
 }
-table.data tbody tr { transition: background .1s; }
-table.data tbody tr:hover { background: var(--bg); }
+table.data thead th { height: auto; }     /* let header row size to its label */
+table.data thead th {
+  background: #e8f0fb;                  /* light blue header */
+  font-weight: 700;
+  color: #1e3a8a;                       /* deep blue header text */
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 1px;
+  border-bottom: 2px solid #b9cdec;
+  padding-top: 13px;
+  padding-bottom: 13px;
+}
+table.data tbody tr { transition: background .12s; }
+table.data tbody tr:hover { background: #e8f0fb; }
+table.data tbody tr:nth-child(even) { background: #f4f8fd; }   /* light blue band */
+table.data tbody tr:nth-child(even):hover { background: #e8f0fb; }
 table.data tbody tr:last-child td { border-bottom: 0; }
-table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* status pills */
+/* Status pills share the same visual rhythm as the action buttons:
+   identical border radius (6px), border weight (1px), and a soft border
+   colour. Background still varies per status so the badge stays scannable,
+   but the OUTLINE looks like part of the same design system. */
 .pill {
-  display: inline-block; padding: 3px 10px; border-radius: 999px;
-  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px;
-  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  height: 24px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  border: 1px solid #cfe0ff;
+  vertical-align: middle;
 }
 .pill.draft     { background: #ecebe5; color: #4a4636; border-color: #d8d4c5; }
 .pill.submitted { background: #dde9f2; color: #1c3d5a; border-color: #b8d0e0; }
@@ -327,11 +360,21 @@ table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pill.open      { background: #d6e6ea; color: #0e4658; border-color: #a7c8d3; }
 .pill.closed    { background: #ebeae4; color: #4b4736; border-color: #d4d0c0; }
 
-/* Review-stage sub-badge shown under invoice status for drafts */
+/* Review-stage sub-badge — matches the .pill outline rhythm so the
+   Status column has a single coherent visual language. */
 .review-badge {
-  display: inline-block; margin-top: 4px; padding: 2px 8px; border-radius: 4px;
-  font-size: 10.5px; font-weight: 600; border: 1px solid transparent;
-  background: #f1f1f1; color: #333;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  padding: 4px 10px;
+  height: 24px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px solid #cfe0ff;
+  background: #f1f1f1;
+  color: #333;
+  vertical-align: middle;
 }
 .review-badge.review-drafting          { background: #fff4c8; color: #6b5611; border-color: #ecd76a; }
 .review-badge.review-sent_for_review   { background: #d6e3ff; color: #1c3970; border-color: #95b3eb; }
@@ -475,25 +518,212 @@ button:disabled {
 .modal-body { padding: 24px 26px; }
 .modal-foot { padding: 16px 26px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; background: var(--bg); border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 
-/* row-actions: ALL buttons in a single horizontal line. Never wraps. The
-   parent .table-wrap provides horizontal scroll if the table overflows the
-   viewport — preferable to wrapping, which makes scanning a row hard. */
+/* ─────────────────────────────────────────────────────────────────────
+   row-actions: simple right-aligned flex row of compact buttons.
+   ─────────────────────────────────────────────────────────────────────
+   The cell holds a horizontal flex container. Buttons pack tightly to the
+   right edge. The rightmost element (⚙ override icon for super-admin, or
+   the last contextual button) always lands at the same X across rows, so
+   the right edge of the column reads as a clean vertical line.
+
+   Standard professional pattern — used by Stripe, FreshBooks, Zoho Books,
+   QuickBooks. Trade-off accepted: leftmost button X varies row-to-row,
+   but the eye scans from the right edge inward anyway. */
+td.row-actions, th.row-actions {
+  white-space: nowrap;
+  text-align: right;
+  padding: 8px 12px 8px 0;
+}
+th.row-actions { padding-top: 12px; padding-bottom: 12px; }
 .row-actions {
   display: flex;
-  gap: 5px;
-  flex-wrap: nowrap;
+  gap: 4px;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: nowrap;
   white-space: nowrap;
 }
-.row-actions .btn-sm {
-  flex-shrink: 0;
-  font-size: 12.5px;   /* up from default ~11px — more readable */
-  padding: 5px 11px;
-  line-height: 1.25;
+
+/* ─── International action-button system ────────────────────────────
+   Every button has the SAME shape (30px height, 6px radius, 1px border)
+   so they form perfectly aligned rows. Each action category gets a soft
+   tint + matching icon for instant visual recognition — but the tints
+   are kept subtle (5% saturation) so the table still reads as calm.
+   Inspired by GitHub action menus + Stripe Dashboard action rows. */
+.ra-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  min-width: 64px;
+  padding: 0 11px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  color: #1e3a8a;                          /* unified deep-blue text */
+  background: #fff;
+  border: 1px solid #cfe0ff;               /* soft blue border — matches status pills */
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  letter-spacing: .1px;
+  vertical-align: middle;
+  transition: background .12s ease, border-color .12s ease, color .12s ease, box-shadow .12s ease;
 }
+.ra-btn:hover {
+  background: #eff5ff;
+  border-color: #93c5fd;
+  color: #1e3a8a;
+}
+.ra-btn:active { background: #dbeafe; }
+.ra-btn:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}
+
+/* ─── Icon inside button — small, accent-coloured glyph */
+.ra-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* ─── Tint variants — each action category gets its own soft accent ───
+   The tint shows up most clearly on the icon + on hover, keeping the
+   table calm at rest but making each button's purpose obvious at a glance. */
+.ra-btn.ra-tint-slate  { color: #475569; }
+.ra-btn.ra-tint-slate .ra-ic  { color: #64748b; }
+.ra-btn.ra-tint-slate:hover   { background: #f1f5f9; border-color: #94a3b8; color: #1e293b; }
+
+.ra-btn.ra-tint-cyan   { color: #0e7490; }
+.ra-btn.ra-tint-cyan .ra-ic   { color: #06b6d4; }
+.ra-btn.ra-tint-cyan:hover    { background: #ecfeff; border-color: #67e8f9; color: #0e7490; }
+
+.ra-btn.ra-tint-purple { color: #6d28d9; }
+.ra-btn.ra-tint-purple .ra-ic { color: #8b5cf6; }
+.ra-btn.ra-tint-purple:hover  { background: #f5f3ff; border-color: #c4b5fd; color: #6d28d9; }
+
+.ra-btn.ra-tint-amber  { color: #b45309; }
+.ra-btn.ra-tint-amber .ra-ic  { color: #d97706; }
+.ra-btn.ra-tint-amber:hover   { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+
+/* ─── Primary CTA — brand navy filled (the single dominant button) */
+.ra-btn.ra-primary {
+  background: #1c3d5a;
+  color: #fff;
+  border-color: #1c3d5a;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(28, 61, 90, .15);
+}
+.ra-btn.ra-primary .ra-ic { color: #fff; }
+.ra-btn.ra-primary:hover {
+  background: #15324b;
+  border-color: #15324b;
+  color: #fff;
+  box-shadow: 0 2px 5px rgba(28, 61, 90, .22);
+}
+.ra-btn.ra-primary:active { background: #122b40; }
+
+/* ─── ••• overflow menu trigger ─── */
+.ra-btn.ra-more {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+  font-size: 16px;
+  letter-spacing: 1px;
+  color: #64748b;
+  font-weight: 700;
+}
+.ra-btn.ra-more:hover { color: #1c3d5a; background: #f1f5f9; border-color: #94a3b8; }
+
+/* ─── Consistent minimum widths so the buttons form a clean rhythm.
+   The rightmost "•••" is always at the same X (flex right-aligns to the
+   table cell's right edge), so the column reads professional even when
+   some rows have one fewer button (e.g. cancelled = no primary CTA). */
+.ra-btn.ra-tint-slate,
+.ra-btn.ra-tint-cyan,
+.ra-btn.ra-tint-purple,
+.ra-btn.ra-tint-amber {
+  min-width: 88px;
+}
+.ra-btn.ra-primary { min-width: 104px; }
+
+/* ─── Ensure last row sits cleanly: padding-bottom matches other rows
+   so the cell content doesn't look "stuck" against the table edge. */
+table.data tbody tr:last-child td {
+  border-bottom: 0;
+  padding-bottom: 14px;
+}
+
+/* Dropdown menu shown on "⋮" click. Anchored to its trigger via position:relative
+   on the wrapper. The wrap is inline-block so it doesn't break the flex layout. */
+.rowmenu-wrap { position: relative; display: inline-block; }
+.rowmenu {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 230px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .14), 0 2px 6px rgba(15, 23, 42, .06);
+  z-index: 50;
+  overflow: hidden;
+  padding: 4px 0;
+  animation: rowmenuFadeIn .14s ease-out;
+}
+.rowmenu.open { display: block; }
+@keyframes rowmenuFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rowmenu-item {
+  display: block;
+  width: 100%;
+  padding: 9px 14px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font-size: 12.5px;
+  color: #1c3d5a;
+  font-family: inherit;
+  white-space: nowrap;
+  transition: background .12s;
+}
+.rowmenu-item:hover { background: #f1f5f9; }
+.rowmenu-item[data-danger="1"]   { color: #b91c1c; }
+.rowmenu-item[data-danger="1"]:hover { background: #fef2f2; }
+.rowmenu-item[data-override="1"] { color: #7c3aed; }
+.rowmenu-item[data-override="1"]:hover { background: #faf5ff; }
+.rowmenu-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 4px 0;
+}
+
+/* Status column: consistent min-width so the gap between status pill(s)
+   and the primary action button stays stable across rows. */
+table.data thead th:nth-last-child(2),
+table.data tbody td:nth-last-child(2) { min-width: 160px; }
 /* Slightly larger font on table body text overall for the busy data tables. */
 table.data tbody td { font-size: 13px; }
+/* Status column: pills should sit on a single line where possible — the
+   stacked DRAFT + Ready-to-Issue pill pair was contributing to the row
+   feeling tall and unbalanced. White-space:normal lets them wrap only when
+   genuinely needed; vertical-align:middle anchors them with the rest of the row. */
+table.data tbody td .pill,
+table.data tbody td .review-stage-pill,
+table.data tbody td .review-stage-badge { vertical-align: middle; }
 .muted { color: var(--muted); }
 .right { text-align: right; }
 .center { text-align: center; }
@@ -889,7 +1119,7 @@ body.with-sidebar main { padding: 22px 28px; max-width: 1600px; }
 .pill.draft   { background: var(--bg-alt); color: var(--muted); border-color: var(--border-strong); }
 .pill.cancelled { background: #f3f4f6; color: var(--muted); border-color: var(--border-strong); text-decoration: line-through; }
 
-.payment-ref { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.payment-ref { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
 .due-badge { font-size: 10.5px; color: var(--danger); font-weight: 600; }
 
 /* Outstanding summary cards */

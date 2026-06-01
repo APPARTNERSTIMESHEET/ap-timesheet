@@ -16,6 +16,7 @@ router.get('/', authRequired, (req, res) => {
       ? `SELECT u.id, u.email, u.full_name, u.role, u.role_id, u.designation, u.default_rate,
                 u.lawyer_code, u.is_active, u.created_at, u.deleted_at,
                 u.last_login_at, u.last_login_ip, u.failed_login_count, u.locked_until,
+                u.timekeeper_classification, u.allowed_tabs,
                 r.code AS role_code, r.name AS role_name
          FROM users u
          LEFT JOIN roles r ON r.id = u.role_id
@@ -145,7 +146,7 @@ router.patch('/:id', authRequired, userManagementOnly, (req, res) => {
     }
   }
 
-  const allowed = ['full_name','role','designation','default_rate','lawyer_code','is_active','role_id','timekeeper_classification'];
+  const allowed = ['full_name','role','designation','default_rate','lawyer_code','is_active','role_id','timekeeper_classification','allowed_tabs'];
   const validClassifications = ['SENIOR_PARTNER','PARTNER','SENIOR_ASSOCIATE','ASSOCIATE','OF_COUNSEL','PARALEGAL'];
   const fields = []; const values = [];
   for (const k of allowed) {
