@@ -100,6 +100,24 @@ router.post('/invoices/manual', authRequired, adminOnly, (req, res) => {
     const reverseCharge = (b.reverse_charge === undefined || b.reverse_charge === null)
                           ? 1 : (b.reverse_charge ? 1 : 0);
     const total     = round2(reverseCharge ? subtotal : (subtotal + taxAmount));
+
+    // ── TDS for manual invoices ──
+    // Read client's TDS config; apply only for INR invoices.
+    let tdsApplicable = 0, tdsRate = 0, tdsAmount = 0, tdsSection = null;
+    let netReceivable = total;
+    if (cur === 'INR') {
+      try {
+        const cRow = db.prepare('SELECT tds_applicable, tds_rate, tds_section FROM clients WHERE id = ?').get(parseInt(b.client_id, 10));
+        if (cRow && cRow.tds_applicable) {
+          tdsApplicable = 1;
+          tdsRate = Number(cRow.tds_rate) || 10;
+          tdsSection = cRow.tds_section || '194J';
+          tdsAmount = round2(subtotal * (tdsRate / 100));
+          netReceivable = round2(total - tdsAmount);
+        }
+      } catch (_) {}
+    }
+
     const invoice_no = (b.invoice_no && b.invoice_no.trim()) ? b.invoice_no.trim() : nextInvoiceNumber();
 
     const tx = db.transaction(() => {
@@ -107,15 +125,17 @@ router.post('/invoices/manual', authRequired, adminOnly, (req, res) => {
         INSERT INTO invoices
           (invoice_no, client_id, invoice_date, due_date, period_from, period_to,
            subtotal, tax_rate, tax_amount, total, currency, notes, created_by, status, tax_type,
-           state_name, state_code, firm_entity, reverse_charge)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?, ?)
+           state_name, state_code, firm_entity, reverse_charge,
+           tds_applicable, tds_rate, tds_amount, tds_section, net_receivable)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         invoice_no, parseInt(b.client_id, 10), b.invoice_date, b.due_date || null,
         b.period_from || b.invoice_date, b.period_to || b.invoice_date,
         subtotal, taxRate, taxAmount, total, cur,
         b.notes || null, req.user.id, b.tax_type || null,
         b.state_name || null, b.state_code || null, b.firm_entity || 'delhi',
-        reverseCharge
+        reverseCharge,
+        tdsApplicable, tdsRate, tdsAmount, tdsSection, netReceivable
       );
       const invoiceId = inv.lastInsertRowid;
       const itemStmt = db.prepare(`
@@ -993,6 +1013,88 @@ router.put('/utbms/mappings', authRequired, adminOnly, (req, res) => {
   writeAuditLog(req, 'UTBMS_MAPPING_UPDATE', 'mapping', null,
     `${activity_type} -> task=${task_code || '-'} activity=${activity_code || '-'} client_id=${client_id || 'global'}`);
   res.json({ ok: true });
+});
+
+// ─── TDS Receivable Report ───────────────────────────────────────────────────
+// Aggregates TDS deducted by clients in a given period, grouped by client +
+// section. Used at year-end to reconcile with Form 26AS from the IT Dept.
+//
+// GET /api/billing/tds-report?from=2025-04-01&to=2026-03-31[&client_id=X]
+// Returns:
+//   {
+//     summary: { total_tds, total_gross, total_net, invoice_count, fy_label },
+//     by_client: [{ client_name, gstin, tds_section, tds_rate, total_gross,
+//                    total_tds, total_net, invoice_count }],
+//     by_section: [{ tds_section, total_tds, invoice_count }],
+//     invoices: [{ invoice_no, invoice_date, client_name, total, tds_amount,
+//                  tds_rate, tds_section, net_receivable, status }]
+//   }
+router.get('/tds-report', authRequired, adminOnly, (req, res) => {
+  const from = req.query.from || (new Date().getFullYear() - 1) + '-04-01';
+  const to   = req.query.to   || new Date().getFullYear() + '-03-31';
+  const clientId = req.query.client_id ? parseInt(req.query.client_id, 10) : null;
+
+  const conds = ['i.tds_applicable = 1', "i.status IN ('issued','paid')",
+                 'i.invoice_date >= ?', 'i.invoice_date <= ?'];
+  const params = [from, to];
+  if (clientId) { conds.push('i.client_id = ?'); params.push(clientId); }
+
+  // Invoice-level rows
+  const invoices = db.prepare(`
+    SELECT i.id, i.invoice_no, i.invoice_date, i.total, i.tds_amount, i.tds_rate,
+           i.tds_section, i.net_receivable, i.status, i.paid_at, i.currency,
+           c.name AS client_name, c.gstin AS client_gstin
+    FROM invoices i
+    JOIN clients c ON c.id = i.client_id
+    WHERE ${conds.join(' AND ')}
+    ORDER BY i.invoice_date DESC, i.id DESC
+  `).all(...params);
+
+  // Group by client
+  const byClientMap = new Map();
+  for (const r of invoices) {
+    const key = r.client_name + '||' + (r.tds_section || '194J');
+    if (!byClientMap.has(key)) {
+      byClientMap.set(key, {
+        client_name: r.client_name, gstin: r.client_gstin,
+        tds_section: r.tds_section, tds_rate: r.tds_rate,
+        total_gross: 0, total_tds: 0, total_net: 0, invoice_count: 0
+      });
+    }
+    const row = byClientMap.get(key);
+    row.total_gross   += Number(r.total) || 0;
+    row.total_tds     += Number(r.tds_amount) || 0;
+    row.total_net     += Number(r.net_receivable) || 0;
+    row.invoice_count += 1;
+  }
+
+  // Group by section
+  const bySectionMap = new Map();
+  for (const r of invoices) {
+    const k = r.tds_section || '194J';
+    if (!bySectionMap.has(k)) bySectionMap.set(k, { tds_section: k, total_tds: 0, invoice_count: 0 });
+    const row = bySectionMap.get(k);
+    row.total_tds += Number(r.tds_amount) || 0;
+    row.invoice_count += 1;
+  }
+
+  // Summary
+  const summary = {
+    total_gross:   invoices.reduce((s, r) => s + (Number(r.total) || 0), 0),
+    total_tds:     invoices.reduce((s, r) => s + (Number(r.tds_amount) || 0), 0),
+    total_net:     invoices.reduce((s, r) => s + (Number(r.net_receivable) || 0), 0),
+    invoice_count: invoices.length,
+    fy_label:      from.slice(0, 4) + '-' + String(parseInt(from.slice(0, 4)) + 1).slice(-2),
+    period_from:   from,
+    period_to:     to
+  };
+
+  res.json({
+    summary,
+    by_client:  Array.from(byClientMap.values()).sort((a, b) => b.total_tds - a.total_tds),
+    by_section: Array.from(bySectionMap.values()).sort((a, b) => b.total_tds - a.total_tds),
+    invoices
+  });
 });
 
 module.exports = router;

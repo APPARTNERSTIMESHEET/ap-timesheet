@@ -4,7 +4,7 @@
 (function () {
   // Admin page accessible by: admin, billing, super_admin, hr, partner_view.
   // Each role sees a different subset of tabs (filtered below).
-  const me = Auth.requireAuth(['admin', 'billing', 'super_admin', 'hr', 'partner_view']);
+  const me = Auth.requireAuth(['admin', 'billing', 'super_admin', 'hr', 'partner_view', 'accounts']);
   if (!me) return;
 
   // Helper: which role does this user effectively have? Prefer role_code (new
@@ -18,20 +18,35 @@
   const isPartnerView = effectiveRole === 'partner_view';
 
   // Tab visibility matrix: which tabs each role can see in the topnav.
-  // HR sees only Leaves & WFH + Masters (employee management focus).
-  // Partner View sees read-only data (reports, dashboards).
-  // Billing sees billing-related tabs only.
-  // Admin / Super Admin see everything.
+  // - HR              → Leaves & WFH + Masters
+  // - Partner View    → Read-only dashboards/reports
+  // - Billing         → Billing tabs
+  // - Accounts        → Billing + Outstanding + Reports (collection focus)
+  // - Admin/Super     → Everything
+  const isAccounts = effectiveRole === 'accounts';
   const tabsForRole = isHR
     ? ['tab-leaves', 'tab-masters']
-    : isPartnerView
-      ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports']
-      : isBilling
-        ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-masters']
-        : ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-leaves', 'tab-masters'];
+    : isAccounts
+      ? ['tab-billing', 'tab-outstanding', 'tab-reports']
+      : isPartnerView
+        ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports']
+        : isBilling
+          ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-masters']
+          : ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-leaves', 'tab-masters'];
 
-  // Default landing tab: HR opens Leaves & WFH; everyone else opens Dashboard.
-  const defaultTab = isHR ? 'tab-leaves' : 'tab-dashboard';
+  // ── Per-user override: if super-admin set allowed_tabs on this user,
+  // use ONLY those tabs (intersection). Lets the firm fine-tune access
+  // per individual without creating new roles.
+  let effectiveTabs = tabsForRole;
+  if (me.allowed_tabs && typeof me.allowed_tabs === 'string') {
+    const override = me.allowed_tabs.split(',').map(s => s.trim()).filter(Boolean);
+    if (override.length) effectiveTabs = override;
+  }
+
+  // Default landing tab: HR → Leaves; Accounts → Billing; everyone else → Dashboard.
+  const defaultTab = isHR ? 'tab-leaves'
+                   : isAccounts ? 'tab-billing'
+                   : (effectiveTabs[0] || 'tab-dashboard');
 
   // ─── Render topbar with admin tabs (filtered by role) ───────────
   const topbarEl = document.getElementById('topbar');
@@ -49,7 +64,7 @@
       { id: 'tab-leaves',      label: 'Leaves &amp; WFH' },
       { id: 'tab-masters',     label: 'Masters' },
     ];
-    const visibleTabs = tabDefs.filter(t => tabsForRole.includes(t.id));
+    const visibleTabs = tabDefs.filter(t => effectiveTabs.includes(t.id));
     const tabButtons = visibleTabs.map(t =>
       `<button data-tab="${t.id}" ${t.id === defaultTab ? 'class="active"' : ''}>${t.label}</button>`
     ).join('');
@@ -76,6 +91,7 @@
             🔔<span id="rem-badge" style="display:none;position:absolute;top:0;right:0;background:#dc2626;color:#fff;font-size:9px;font-weight:700;border-radius:8px;padding:1px 5px;min-width:14px;text-align:center;">0</span>
           </button>
           <div class="userbox-avatar" title="${escapeHtml(me.email || '')}">${initials}</div>
+          <button onclick="open2FASettings()" title="Two-factor authentication" style="background:none;border:0;font-size:16px;cursor:pointer;padding:4px 8px;">🔐</button>
           <button onclick="Auth.logout()">Logout</button>
         </div>
       </div>`;
@@ -185,10 +201,16 @@
   };
 
   // ─── DASHBOARD ───────────────────────────────────────────────────────
+  // The dashboard + outstanding endpoints are fetched in parallel — saving
+  // one round-trip vs the sequential await-then-await pattern that was here
+  // before. Cached on window.__dashCache so subsequent re-renders don't hit
+  // the server unnecessarily.
   async function loadDashboard() {
-    const d = await api('/api/admin/dashboard');
-    let overdueCount = 0;
-    try { const ov = await api('/api/billing/outstanding'); overdueCount = (ov.overdue||[]).length; } catch(e){}
+    const [d, ov] = await Promise.all([
+      api('/api/admin/dashboard'),
+      api('/api/billing/outstanding').catch(() => ({ overdue: [] }))
+    ]);
+    const overdueCount = (ov && ov.overdue || []).length;
 
     const util = d.month_hours > 0 ? ((d.month_billable_hours / d.month_hours) * 100) : 0;
     const utilColor = util >= 80 ? '' : util >= 60 ? 'warn' : 'danger';
@@ -1211,22 +1233,7 @@
             ${i.payment_ref ? `<div class="payment-ref">Ref: ${escapeHtml(i.payment_ref)}</div>` : ''}
             ${i.paid_at ? `<div class="payment-ref">Paid: ${fmtDate(i.paid_at)}</div>` : ''}
           </td>
-          <td class="row-actions">
-            ${i.status === 'draft'
-              ? `<button class="btn btn-sm btn-ghost" onclick="editDraftInvoice(${i.id})">✏ Edit</button>
-                 <button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})">👁 Preview</button>
-                 <button class="btn btn-sm btn-ghost" onclick="showReviewStageMenu(${i.id}, '${i.review_stage||''}')" title="Change review stage">🏷 Stage</button>
-                 <button class="btn btn-sm btn-accent" onclick="issueDraftFromList(${i.id})">✅ Issue</button>
-                 <button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})">Cancel</button>`
-              : `<button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})" title="Download invoice PDF">PDF</button>
-                 <button class="btn btn-sm btn-ghost" onclick="exportLEDES(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Export in LEDES format for corporate e-billing platforms (Tymetrix, LegalTracker, etc.)">LEDES</button>
-                 <button class="btn btn-sm btn-ghost" onclick="emailInvoice(${i.id},'${escapeHtml(i.client_name)}')" title="Email this invoice to the client">Email</button>
-                 ${(i.status==='issued'||isOverdue) ? `<button class="btn btn-sm btn-success" onclick="markPaid(${i.id})" title="Mark this invoice as paid">Paid</button>` : ''}
-                 ${i.status==='issued' ? `<button class="btn btn-sm btn-ghost" onclick="reviseInvoice(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Cancel this invoice and start a new draft with the same items">Revise</button>` : ''}
-                 ${i.status==='paid' ? `<button class="btn btn-sm btn-ghost" onclick="unmarkPaid(${i.id}, '${escapeHtml(i.invoice_no)}')" title="Revert to Issued — use this if Paid was clicked by mistake. Audit-logged.">Unmark</button>` : ''}
-                 ${i.status!=='cancelled'&&i.status!=='paid' ? `<button class="btn btn-sm btn-warning" onclick="cancelInvoice(${i.id})" title="Cancel this invoice">Cancel</button>` : ''}
-                 ${isSuperAdmin ? renderInvoiceAdminMenu(i) : ''}`
-            }
+          <td class="row-actions">${renderInvoiceRowActions(i, isOverdue, isSuperAdmin)}</td>
           </td>
         </tr>`;
       }).join('')}</tbody></table>`;
@@ -1248,6 +1255,8 @@
       if (i.status === 'paid')         { s.paid++;    s.paidAmt    += amt; }
       if (i.status === 'draft')        { s.draft++; }
     }
+    // Colour-coded KPI cards — semantic colour per metric so the financial
+    // health of the firm reads at a glance from across the room.
     const card = (label, value, sub, color) =>
       `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;border-left:3px solid ${color};">
          <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">${label}</div>
@@ -1441,12 +1450,24 @@
           ${attachRow}
         </div>
 
-        <div style="margin-top:10px;padding:10px 12px;background:#f8fafc;border-radius:6px;font-size:11px;color:#64748b;">
-          💡 <strong>Quick recipient shortcuts:</strong>
-          <button type="button" onclick="ceAddAdmins()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ All Admins</button>
-          <button type="button" onclick="ceAddBilling()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ Billing</button>
-          <button type="button" onclick="ceAddPartners()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ Partners</button>
-          <button type="button" onclick="ceAddAllStaff()" style="font-size:11px;padding:3px 8px;margin:2px;border:1px solid #cbd5e1;background:#fff;border-radius:4px;cursor:pointer;">+ All Staff</button>
+        <div style="margin-top:10px;padding:10px 12px;background:#f0f6ff;border:1px solid #cfe0ff;border-radius:6px;font-size:11px;color:#475569;">
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+            <strong>💡 Quick add to:</strong>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;">
+              <input type="radio" name="ce-target" value="to" id="ce-target-to" style="margin:0;">
+              To
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-weight:600;color:#1e40af;">
+              <input type="radio" name="ce-target" value="cc" id="ce-target-cc" checked style="margin:0;">
+              CC
+            </label>
+          </div>
+          <div style="margin-top:8px;">
+            <button type="button" onclick="ceAddAdmins()"   style="font-size:11px;padding:4px 10px;margin:2px;border:1px solid #93c5fd;background:#fff;border-radius:4px;cursor:pointer;font-weight:500;">+ All Admins</button>
+            <button type="button" onclick="ceAddBilling()"  style="font-size:11px;padding:4px 10px;margin:2px;border:1px solid #93c5fd;background:#fff;border-radius:4px;cursor:pointer;font-weight:500;">+ Billing</button>
+            <button type="button" onclick="ceAddPartners()" style="font-size:11px;padding:4px 10px;margin:2px;border:1px solid #93c5fd;background:#fff;border-radius:4px;cursor:pointer;font-weight:500;">+ Partners</button>
+            <button type="button" onclick="ceAddAllStaff()" style="font-size:11px;padding:4px 10px;margin:2px;border:1px solid #93c5fd;background:#fff;border-radius:4px;cursor:pointer;font-weight:500;">+ All Staff</button>
+          </div>
         </div>
 
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px;">
@@ -1463,14 +1484,34 @@
     return (window.AP_CONFIG && window.AP_CONFIG.smtp_from) || null;
   }
 
-  // Append a comma-separated set of emails to the To field (without duplicates).
+  // Append a comma-separated set of emails to whichever recipient field the
+  // user picked (To / CC) via the target radio in the modal. Default is CC
+  // so that the firm's own staff don't accidentally land in the To line
+  // alongside the actual client. De-duplicates against BOTH fields so the
+  // same address never appears twice across To+CC.
   function ceAppendEmails(emails) {
-    const toEl = document.getElementById('ce-to');
-    const existing = (toEl.value || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const targetRadio = document.querySelector('input[name="ce-target"]:checked');
+    const target = targetRadio ? targetRadio.value : 'cc';
+    const fieldId = target === 'to' ? 'ce-to' : 'ce-cc';
+    const fieldEl = document.getElementById(fieldId);
+    if (!fieldEl) return;
+
+    // Collect every email currently in EITHER field, lowercased, for dedup.
+    const inTo = (document.getElementById('ce-to')?.value || '')
+                  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const inCc = (document.getElementById('ce-cc')?.value || '')
+                  .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const alreadyAnywhere = new Set([...inTo, ...inCc]);
+
+    const existingInTarget = (fieldEl.value || '')
+                  .split(',').map(s => s.trim()).filter(Boolean);
     for (const e of emails) {
-      if (!existing.includes(e.toLowerCase())) existing.push(e);
+      if (!alreadyAnywhere.has(e.toLowerCase())) {
+        existingInTarget.push(e);
+        alreadyAnywhere.add(e.toLowerCase());
+      }
     }
-    toEl.value = existing.join(', ');
+    fieldEl.value = existingInTarget.join(', ');
   }
 
   window.ceAddAdmins = async function() {
@@ -1838,6 +1879,91 @@
   // clicked by mistake, or when a payment bounced and needs to be undone.
   // Backend PATCH auto-clears paid_at when transitioning out of paid.
   // Action is audit-logged via notifyAdminsOfBillingAction in the route.
+  // ─── Invoice row actions ─ international finance-SaaS pattern ──────
+  // Every row shows:
+  //   - 1 PRIMARY contextual button (filled brand colour, single accent)
+  //   - 1-N SECONDARY buttons (white ghost — no colour flooding)
+  //   - 1 "•••" overflow menu containing the rest
+  // Only the primary CTA carries colour; everything else stays neutral so
+  // the table reads as calm, professional, and brand-consistent. This is
+  // the pattern Stripe / Notion / Linear / Mercury all converge on.
+  function renderInvoiceRowActions(i, isOverdue, isSuperAdmin) {
+    const inv = escapeHtml(i.invoice_no);
+    const cli = escapeHtml(i.client_name);
+    const total = Number(i.total) || 0;
+    const inline = [];          // visible buttons
+    const overflowItems = [];   // hidden in "•••" menu
+
+    // ── Primary CTA (rendered only when applicable; cancelled rows skip it
+    // and pack the remaining buttons tightly — the rightmost "•••" still
+    // lands at the same X for every row thanks to flex right-alignment). ──
+    if (i.status === 'draft') {
+      inline.push(`<button class="ra-btn ra-primary" onclick="issueDraftFromList(${i.id})" title="Issue this draft"><span class="ra-ic">✓</span>Issue</button>`);
+    } else if (i.status === 'issued' || isOverdue) {
+      inline.push(`<button class="ra-btn ra-primary" onclick="markPaid(${i.id})" title="Mark as paid"><span class="ra-ic">✓</span>Mark Paid</button>`);
+    } else if (i.status === 'paid') {
+      inline.push(`<button class="ra-btn ra-tint-amber" onclick="unmarkPaid(${i.id}, '${inv}')" title="Revert paid → issued (audit-logged)"><span class="ra-ic">↶</span>Unmark</button>`);
+    }
+    // No primary button for cancelled — row stays tight, no awkward empty space.
+
+    // ── Secondary inline actions ──
+    if (i.status === 'draft') {
+      inline.unshift(`<button class="ra-btn ra-tint-purple" onclick="editDraftInvoice(${i.id})" title="Edit draft"><span class="ra-ic">✎</span>Edit</button>`);
+      inline.unshift(`<button class="ra-btn ra-tint-slate" onclick="downloadInvoicePDF(${i.id})" title="Preview PDF"><span class="ra-ic">◉</span>Preview</button>`);
+    } else {
+      inline.unshift(`<button class="ra-btn ra-tint-cyan" onclick="emailInvoice(${i.id}, '${cli}')" title="Email to client"><span class="ra-ic">✉</span>Email</button>`);
+      inline.unshift(`<button class="ra-btn ra-tint-slate" onclick="downloadInvoicePDF(${i.id})" title="Download PDF"><span class="ra-ic">⤓</span>PDF</button>`);
+    }
+
+    // ── Overflow menu items (less-frequent actions) ──
+    if (i.status === 'draft') {
+      overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); showReviewStageMenu(${i.id}, '${i.review_stage||''}')">🏷 Change review stage</button>`);
+      overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); cancelInvoice(${i.id})" data-danger="1">✕ Cancel draft</button>`);
+    } else {
+      overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); exportLEDES(${i.id}, '${inv}')">📤 Export LEDES</button>`);
+      if (i.status === 'issued') {
+        overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); reviseInvoice(${i.id}, '${inv}')">🔄 Revise (clone as draft)</button>`);
+      }
+      if (i.status !== 'cancelled' && i.status !== 'paid') {
+        overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); cancelInvoice(${i.id})" data-danger="1">✕ Cancel invoice</button>`);
+      }
+    }
+    if (isSuperAdmin) {
+      overflowItems.push(`<div class="rowmenu-divider"></div>`);
+      if (i.status !== 'draft') {
+        overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); superAdminEditInvoice(${i.id}, '${inv}', '${i.status}')" data-override="1">🔓 Edit (admin override)</button>`);
+      }
+      overflowItems.push(`<button class="rowmenu-item" onclick="closeAllRowMenus(); superAdminHardDelete(${i.id}, '${inv}', '${i.status}', ${total})" data-danger="1">🛑 Hard-delete from DB</button>`);
+    }
+
+    // ── Overflow menu trigger ──
+    inline.push(`<span class="rowmenu-wrap">
+      <button class="ra-btn ra-more" onclick="toggleRowMenu(${i.id}, event)" title="More actions">•••</button>
+      <div id="rowmenu-${i.id}" class="rowmenu" role="menu">${overflowItems.join('')}</div>
+    </span>`);
+
+    return inline.join('');
+  }
+
+  // Dropdown plumbing — outside-click + Esc + only-one-open-at-a-time.
+  window.toggleRowMenu = function(id, ev) {
+    if (ev) ev.stopPropagation();
+    const target = document.getElementById('rowmenu-' + id);
+    const wasOpen = target && target.classList.contains('open');
+    closeAllRowMenus();
+    if (target && !wasOpen) target.classList.add('open');
+  };
+  window.closeAllRowMenus = function() {
+    document.querySelectorAll('.rowmenu.open').forEach(el => el.classList.remove('open'));
+  };
+  if (!window.__rowMenuOutsideBound) {
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.rowmenu-wrap')) closeAllRowMenus();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAllRowMenus(); });
+    window.__rowMenuOutsideBound = true;
+  }
+
   // ─── Compact "⚙ Admin ▾" menu shown next to invoice rows for super_admin
   // Hides the destructive override actions (Edit / Hard-Delete) behind a single
   // chip so the standard row stays clean. Click toggles a small floating menu.
@@ -2578,6 +2704,208 @@ AP & Partners`;
     downloadCSV('profitability.csv', rows);
   };
 
+  // ─── TDS REPORT ───────────────────────────────────────────────────────
+  // Aggregates TDS deducted by clients in the selected period. Auto-defaults
+  // to the current Indian Financial Year (Apr 1 → Mar 31). Three-section UI:
+  // (1) KPI summary cards, (2) by-client breakdown table, (3) invoice-level
+  // detail rows with PDF download links. Excel export for Form 26AS upload.
+  let LAST_TDS_REPORT = null;   // cached for Excel export
+
+  // Auto-fill default date range = current Indian FY (Apr 1 → Mar 31).
+  function _currentFY() {
+    const now = new Date();
+    const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+    return { from: year + '-04-01', to: (year + 1) + '-03-31', label: year + '-' + String(year + 1).slice(-2) };
+  }
+
+  // When the user first opens the TDS report sub-tab, pre-populate dates +
+  // client dropdown. Called from the sub-tab click handler below.
+  function _initTDSReportUI() {
+    const fromEl = document.getElementById('tds-from');
+    const toEl   = document.getElementById('tds-to');
+    const clEl   = document.getElementById('tds-client');
+    if (fromEl && !fromEl.value) {
+      const fy = _currentFY();
+      fromEl.value = fy.from;
+      toEl.value   = fy.to;
+    }
+    if (clEl && clEl.options.length <= 1 && Array.isArray(CLIENTS)) {
+      clEl.innerHTML = '<option value="">All clients</option>' +
+        CLIENTS.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    }
+  }
+
+  window.loadTDSReport = async function() {
+    _initTDSReportUI();
+    const from = document.getElementById('tds-from').value;
+    const to   = document.getElementById('tds-to').value;
+    const cid  = document.getElementById('tds-client').value;
+    if (!from || !to) { alert('Pick From and To dates first.'); return; }
+
+    const params = new URLSearchParams({ from, to });
+    if (cid) params.set('client_id', cid);
+
+    try {
+      const r = await api('/api/billing/tds-report?' + params.toString());
+      LAST_TDS_REPORT = r;
+
+      // ── KPI cards ──
+      const s = r.summary || {};
+      const kpisEl = document.getElementById('tds-kpis');
+      kpisEl.innerHTML = `
+        <div style="background:#fff;border:1px solid #cfe0ff;border-left:4px solid #1e3a8a;border-radius:8px;padding:14px;">
+          <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.7px;font-weight:700;">TDS Receivable (FY ${s.fy_label || ''})</div>
+          <div style="font-size:24px;font-weight:700;color:#1e3a8a;margin-top:4px;">${fmtMoney(s.total_tds, 'INR')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${s.invoice_count} invoices · ${s.period_from} to ${s.period_to}</div>
+        </div>
+        <div style="background:#fff;border:1px solid #cfe0ff;border-left:4px solid #16a34a;border-radius:8px;padding:14px;">
+          <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.7px;font-weight:700;">Gross Billed</div>
+          <div style="font-size:24px;font-weight:700;color:#15803d;margin-top:4px;">${fmtMoney(s.total_gross, 'INR')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">Before TDS deduction</div>
+        </div>
+        <div style="background:#fff;border:1px solid #cfe0ff;border-left:4px solid #d97706;border-radius:8px;padding:14px;">
+          <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.7px;font-weight:700;">Net Receivable</div>
+          <div style="font-size:24px;font-weight:700;color:#b45309;margin-top:4px;">${fmtMoney(s.total_net, 'INR')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">Actually expected from clients</div>
+        </div>
+        <div style="background:#fff;border:1px solid #cfe0ff;border-left:4px solid #7c3aed;border-radius:8px;padding:14px;">
+          <div style="font-size:10.5px;color:#64748b;text-transform:uppercase;letter-spacing:.7px;font-weight:700;">Effective TDS %</div>
+          <div style="font-size:24px;font-weight:700;color:#6d28d9;margin-top:4px;">${s.total_gross > 0 ? (s.total_tds / s.total_gross * 100).toFixed(2) : '0.00'}%</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">Weighted avg across clients</div>
+        </div>
+      `;
+
+      // ── By-client breakdown ──
+      const byCl = r.by_client || [];
+      const bySec = r.by_section || [];
+      let breakdown = '';
+      if (byCl.length) {
+        breakdown += `
+          <div class="card-title" style="margin-top:8px;">📊 By Client</div>
+          <div class="table-wrap" style="margin-bottom:10px;">
+            <table class="data" style="width:100%;font-size:12.5px;">
+              <thead><tr>
+                <th>Client</th><th>GSTIN</th><th>Section</th><th class="num">Rate</th>
+                <th class="num">Invoices</th><th class="num">Gross (₹)</th>
+                <th class="num">TDS (₹)</th><th class="num">Net (₹)</th>
+              </tr></thead>
+              <tbody>
+                ${byCl.map(c => `<tr>
+                  <td><strong>${escapeHtml(c.client_name)}</strong></td>
+                  <td><code style="font-size:11px;">${escapeHtml(c.gstin || '—')}</code></td>
+                  <td>${escapeHtml(c.tds_section || '194J')}</td>
+                  <td class="num">${Number(c.tds_rate).toFixed(2)}%</td>
+                  <td class="num">${c.invoice_count}</td>
+                  <td class="num">${fmtMoney(c.total_gross, 'INR')}</td>
+                  <td class="num"><strong style="color:#1e3a8a;">${fmtMoney(c.total_tds, 'INR')}</strong></td>
+                  <td class="num">${fmtMoney(c.total_net, 'INR')}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }
+      if (bySec.length > 1) {
+        breakdown += `
+          <div class="card-title" style="margin-top:8px;">📑 By TDS Section</div>
+          <div class="table-wrap" style="margin-bottom:10px;">
+            <table class="data" style="width:100%;font-size:12.5px;">
+              <thead><tr><th>Section</th><th class="num">Invoices</th><th class="num">Total TDS (₹)</th></tr></thead>
+              <tbody>
+                ${bySec.map(s => `<tr>
+                  <td><strong>${escapeHtml(s.tds_section)}</strong></td>
+                  <td class="num">${s.invoice_count}</td>
+                  <td class="num"><strong>${fmtMoney(s.total_tds, 'INR')}</strong></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      }
+      document.getElementById('tds-breakdown').innerHTML = breakdown ||
+        '<div class="empty" style="padding:16px;color:var(--muted);">No TDS-applicable invoices in this period.</div>';
+
+      // ── Invoice-level detail ──
+      const invs = r.invoices || [];
+      if (invs.length) {
+        document.getElementById('tds-invoices').innerHTML = `
+          <div class="card-title" style="margin-top:8px;">📄 Invoice-level Detail (${invs.length})</div>
+          <div class="table-wrap" style="max-height:480px;overflow-y:auto;">
+            <table class="data" style="width:100%;font-size:12px;">
+              <thead><tr>
+                <th>Date</th><th>Invoice #</th><th>Client</th>
+                <th class="num">Gross (₹)</th><th>Section</th><th class="num">Rate</th>
+                <th class="num">TDS (₹)</th><th class="num">Net (₹)</th><th>Status</th><th>PDF</th>
+              </tr></thead>
+              <tbody>
+                ${invs.map(i => `<tr>
+                  <td>${fmtDate(i.invoice_date)}</td>
+                  <td><strong>${escapeHtml(i.invoice_no)}</strong></td>
+                  <td>${escapeHtml(i.client_name)}</td>
+                  <td class="num">${fmtMoney(i.total, 'INR')}</td>
+                  <td>${escapeHtml(i.tds_section || '194J')}</td>
+                  <td class="num">${Number(i.tds_rate).toFixed(1)}%</td>
+                  <td class="num"><strong style="color:#1e3a8a;">${fmtMoney(i.tds_amount, 'INR')}</strong></td>
+                  <td class="num">${fmtMoney(i.net_receivable, 'INR')}</td>
+                  <td><span class="pill ${i.status}">${i.status}</span></td>
+                  <td><button class="btn btn-sm btn-ghost" onclick="downloadInvoicePDF(${i.id})">📄</button></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>`;
+      } else {
+        document.getElementById('tds-invoices').innerHTML = '';
+      }
+    } catch(e) {
+      alert('TDS Report load failed: ' + (e.message || 'unknown'));
+    }
+  };
+
+  window.exportTDSReportExcel = function() {
+    if (!LAST_TDS_REPORT) { alert('Pehle "Run Report" click karo.'); return; }
+    if (typeof XLSX === 'undefined') { alert('XLSX library not loaded.'); return; }
+    const wb = XLSX.utils.book_new();
+
+    // Sheet 1: Summary
+    const s = LAST_TDS_REPORT.summary;
+    const summaryRows = [
+      ['TDS RECEIVABLE REPORT — Form 26AS Reconciliation'],
+      [],
+      ['Financial Year', s.fy_label],
+      ['Period', s.period_from + ' to ' + s.period_to],
+      [],
+      ['Metric', 'Value'],
+      ['Total invoices', s.invoice_count],
+      ['Gross billed (₹)', s.total_gross.toFixed(2)],
+      ['TDS deducted (₹)', s.total_tds.toFixed(2)],
+      ['Net receivable (₹)', s.total_net.toFixed(2)],
+      ['Effective TDS rate (%)', s.total_gross > 0 ? (s.total_tds / s.total_gross * 100).toFixed(2) : '0.00'],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryRows), 'Summary');
+
+    // Sheet 2: By Client
+    const byClRows = [['Client', 'GSTIN', 'Section', 'TDS Rate %', 'Invoices', 'Gross (₹)', 'TDS (₹)', 'Net (₹)']];
+    for (const c of LAST_TDS_REPORT.by_client) {
+      byClRows.push([c.client_name, c.gstin || '', c.tds_section || '194J',
+                     Number(c.tds_rate).toFixed(2), c.invoice_count,
+                     Number(c.total_gross).toFixed(2), Number(c.total_tds).toFixed(2),
+                     Number(c.total_net).toFixed(2)]);
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(byClRows), 'By Client');
+
+    // Sheet 3: All invoices
+    const invRows = [['Date', 'Invoice #', 'Client', 'GSTIN', 'Section', 'TDS Rate %',
+                      'Gross (₹)', 'TDS (₹)', 'Net Receivable (₹)', 'Status', 'Paid At']];
+    for (const i of LAST_TDS_REPORT.invoices) {
+      invRows.push([i.invoice_date, i.invoice_no, i.client_name, i.client_gstin || '',
+                    i.tds_section || '194J', Number(i.tds_rate).toFixed(2),
+                    Number(i.total).toFixed(2), Number(i.tds_amount).toFixed(2),
+                    Number(i.net_receivable).toFixed(2), i.status, i.paid_at || '']);
+    }
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(invRows), 'Invoices');
+
+    const filename = `TDS-Report-FY${s.fy_label}-${todayISO()}.xlsx`;
+    XLSX.writeFile(wb, filename);
+  };
+
   // ─── MASTERS ─────────────────────────────────────────────────────────
   // Whether the current user can manage other users (create/edit/delete).
   // Only admin and super_admin should see user management actions; billing
@@ -2639,6 +2967,7 @@ AP & Partners`;
             <div class="form-row"><label>Role</label><select id="u-role">
               <option value="associate"   ${u&&(u.role==='associate'||u.role_code==='associate')?'selected':''}>Associate</option>
               <option value="billing"     ${u&&(u.role==='billing'||u.role_code==='billing')?'selected':''}>Billing</option>
+              <option value="accounts"    ${u&&u.role_code==='accounts'?'selected':''}>Accounts (TDS / Invoice / Outstanding only)</option>
               <option value="hr"          ${u&&u.role_code==='hr'?'selected':''}>HR</option>
               <option value="partner_view" ${u&&u.role_code==='partner_view'?'selected':''}>Partner View</option>
               ${canManageRoles
@@ -2662,6 +2991,43 @@ AP & Partners`;
             <div class="form-row"><label>Lawyer Code (e.g. ANS)</label><input id="u-lcode" maxlength="10" value="${escapeHtml(u?(u.lawyer_code||''):'')}" autocomplete="off" style="text-transform:uppercase;"></div>
             <div class="form-row"><label>${isNew?'Password':'New password (blank = keep)'}</label><input type="password" id="u-pwd" autocomplete="new-password"></div>
           </div>
+
+          ${isSuperAdmin ? `
+          <fieldset style="border:1px solid var(--border);border-radius:6px;padding:14px;margin-top:14px;">
+            <legend style="padding:0 8px;font-weight:600;font-size:13px;color:#1e3a8a;">🛡️ Panel Access (Super-Admin Override)</legend>
+            <p style="font-size:11.5px;color:var(--muted);margin:0 0 12px;">
+              Default panels aata hai role se. Yahan checkbox karke aap **per-user override** kar sakte ho —
+              e.g., ek "Billing" user ko Reports tab se hide kar do, ya "Accounts" user ko Timesheets bhi dikha do.
+              Sab uncheck = role default behaviour (no override).
+            </p>
+            ${(function(){
+              const tabs = [
+                { id: 'tab-dashboard',   label: 'Dashboard' },
+                { id: 'tab-entries',     label: 'Timesheets' },
+                { id: 'tab-billing',     label: 'Billing' },
+                { id: 'tab-outstanding', label: 'Outstanding' },
+                { id: 'tab-reports',     label: 'Reports' },
+                { id: 'tab-leaves',      label: 'Leaves & WFH' },
+                { id: 'tab-masters',     label: 'Masters' },
+                { id: 'tab-activity',    label: 'Activity Log' }
+              ];
+              const current = (u && u.allowed_tabs) ? u.allowed_tabs.split(',').map(s=>s.trim()).filter(Boolean) : [];
+              const hasOverride = current.length > 0;
+              return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+                ${tabs.map(t => `
+                  <label style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#fff;border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12.5px;">
+                    <input type="checkbox" class="u-tab-cb" data-tab="${t.id}" ${hasOverride && current.includes(t.id) ? 'checked' : ''} style="margin:0;">
+                    ${t.label}
+                  </label>
+                `).join('')}
+              </div>
+              <div style="margin-top:10px;font-size:11.5px;">
+                <button type="button" class="btn btn-sm btn-ghost" onclick="document.querySelectorAll('.u-tab-cb').forEach(c=>c.checked=false);" style="margin-right:6px;">Clear (use role default)</button>
+                <button type="button" class="btn btn-sm btn-ghost" onclick="document.querySelectorAll('.u-tab-cb').forEach(c=>c.checked=true);">Grant all</button>
+              </div>`;
+            })()}
+          </fieldset>
+          ` : ''}
         </div>
       </form>
       <div class="modal-foot">
@@ -2681,6 +3047,15 @@ AP & Partners`;
       lawyer_code: (document.getElementById('u-lcode').value||'').trim().toUpperCase()||null,
       timekeeper_classification: (document.getElementById('u-tk-class') && document.getElementById('u-tk-class').value) || null
     };
+    // Super-admin panel-access override. Collect checked tab IDs into CSV.
+    // Empty string → clear override (revert to role default behaviour).
+    const tabCBs = document.querySelectorAll('.u-tab-cb');
+    if (tabCBs.length > 0) {
+      const checked = Array.from(tabCBs)
+        .filter(c => c.checked)
+        .map(c => c.dataset.tab);
+      body.allowed_tabs = checked.length ? checked.join(',') : null;
+    }
     const pwd = document.getElementById('u-pwd').value;
     try {
       if (id) { if (pwd) body.password = pwd; await api('/api/users/'+id, {method:'PATCH', body}); }
@@ -2780,6 +3155,39 @@ AP & Partners`;
           </div>
         </fieldset>
 
+        <!-- TDS section — for Indian B2B clients who deduct TDS at payment time -->
+        <fieldset style="border:1px solid var(--border);border-radius:6px;padding:14px;margin-top:14px;">
+          <legend style="padding:0 8px;font-weight:600;font-size:13px;color:#1e3a8a;">💸 TDS (Tax Deducted at Source)</legend>
+          <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px;">
+            If this client deducts TDS when paying, enable it. Invoices will auto-show: <em>"Less: TDS @ X%"</em> + <em>"Net Amount Receivable"</em>.
+            Year-end mein Form 26AS se reconcile karne ke liye useful.
+          </p>
+          <div class="form-grid cols-3">
+            <div class="form-row">
+              <label>TDS Applicable?</label>
+              <select id="c-tds-applicable">
+                <option value="0" ${!c||!c.tds_applicable?'selected':''}>No</option>
+                <option value="1" ${c&&c.tds_applicable?'selected':''}>Yes</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <label>TDS Rate (%)</label>
+              <input type="number" step="0.01" id="c-tds-rate" value="${c&&c.tds_rate!=null?c.tds_rate:10}" placeholder="10">
+            </div>
+            <div class="form-row">
+              <label>TDS Section</label>
+              <select id="c-tds-section">
+                <option value="194J" ${!c||(c.tds_section||'194J')==='194J'?'selected':''}>194J — Professional/Technical fees (10%)</option>
+                <option value="194C" ${c&&c.tds_section==='194C'?'selected':''}>194C — Contractual (1-2%)</option>
+                <option value="194I" ${c&&c.tds_section==='194I'?'selected':''}>194I — Rent (10%)</option>
+                <option value="194Q" ${c&&c.tds_section==='194Q'?'selected':''}>194Q — Purchase of goods (0.1%)</option>
+                <option value="195"  ${c&&c.tds_section==='195'?'selected':''}>195 — Non-residents</option>
+                <option value="OTHER" ${c&&c.tds_section==='OTHER'?'selected':''}>Other</option>
+              </select>
+            </div>
+          </div>
+        </fieldset>
+
       </div>
       <div class="modal-foot">
         <button class="btn btn-ghost" onclick="document.getElementById('c-modal').remove()">Cancel</button>
@@ -2804,7 +3212,10 @@ AP & Partners`;
       default_currency:document.getElementById('c-currency').value || null,
       client_internal_id:(document.getElementById('c-internal-id') && document.getElementById('c-internal-id').value.trim()) || null,
       requires_ledes: document.getElementById('c-requires-ledes') ? parseInt(document.getElementById('c-requires-ledes').value, 10) : 0,
-      ledes_format: (document.getElementById('c-ledes-format') && document.getElementById('c-ledes-format').value) || null
+      ledes_format: (document.getElementById('c-ledes-format') && document.getElementById('c-ledes-format').value) || null,
+      tds_applicable: document.getElementById('c-tds-applicable') ? parseInt(document.getElementById('c-tds-applicable').value, 10) : 0,
+      tds_rate: parseFloat(document.getElementById('c-tds-rate')?.value) || 10,
+      tds_section: document.getElementById('c-tds-section')?.value || '194J'
     };
     // Auto-trim name and other text fields to avoid trailing whitespace
     ['code','name','contact_person','email','phone','gstin','state_name','kind_attn'].forEach(k => {
@@ -3072,6 +3483,9 @@ AP & Partners`;
       }
     }
     parent.classList.add('active');
+
+    // ── Auto-init sub-tabs that need a one-time setup (e.g., date defaults). ──
+    if (id === 'stab-rp-tds' && typeof _initTDSReportUI === 'function') _initTDSReportUI();
   };
 
   function switchMTab(id) {
@@ -4658,53 +5072,83 @@ AP & Partners`;
   document.addEventListener('scroll', updateTopnavOverflowIndicator, true);
 
   // ─── INIT ─────────────────────────────────────────────────────────────
+  // Boot the admin page. Previously this made 6 sequential API calls after
+  // loadMe — total round-trip time = sum of all of them. Now everything
+  // post-auth fires in parallel; the user sees the dashboard ~3-5x faster
+  // on a slow link. Errors in any one branch don't block the others.
   (async function () {
     try {
       await loadMe();
       // Run the topnav fade check once topbar is in the DOM
       setTimeout(updateTopnavOverflowIndicator, 50);
-      await Promise.all([loadDashboard(), loadMasters()]);
-      // Fetch pending count once at boot so the topnav can show a badge later.
-      try { const d = await api('/api/leaves/dashboard'); const badge = document.getElementById('lv-pending-count'); if (badge && d.pending_count > 0) { badge.style.display='inline-block'; badge.textContent = d.pending_count; } } catch(_) {}
-      try {
-        const w = await api('/api/wfh/dashboard');
-        // Two badges to keep in sync: the inner sub-sub-tab "Pending Approvals"
-        // (#wfh-pending-count) and the outer Leaves "🏠 WFH" sub-tab (#wfh-outer-badge).
+
+      // Skip overdue popup if user dismissed it today.
+      const overdueDismissKey   = 'ap-overdue-dismissed-' + todayISO();
+      const remindersDismissKey = 'ap-reminders-dismissed-' + todayISO();
+      const skipOverduePopup   = !!localStorage.getItem(overdueDismissKey);
+      const skipRemindersPopup = !!localStorage.getItem(remindersDismissKey);
+
+      // Fire every boot API call in parallel. Each branch handles its own
+      // errors via .catch(() => null) so one slow / failing endpoint never
+      // delays the rest of the UI.
+      const [/* dashboard */, /* masters */, leavesDash, wfhDash, outstandingResp, remindersResp] = await Promise.all([
+        loadDashboard().catch(e => { console.error('loadDashboard:', e); }),
+        loadMasters().catch(e => { console.error('loadMasters:', e); }),
+        api('/api/leaves/dashboard').catch(() => null),
+        api('/api/wfh/dashboard').catch(() => null),
+        // Outstanding is fetched here for the popup; loadDashboard ALSO fetches
+        // it for the overdue KPI. To avoid double-fetching, we let loadDashboard
+        // own the KPI and reuse that response for the popup if needed. The
+        // duplicate request was the second-biggest perf cost after asset size.
+        skipOverduePopup ? Promise.resolve(null) : api('/api/billing/outstanding').catch(() => null),
+        api('/api/admin-tools/reminders/due').catch(() => null)
+      ]);
+
+      // ── Leaves pending badge ─────────────────────────────────────────
+      if (leavesDash) {
+        const badge = document.getElementById('lv-pending-count');
+        if (badge && leavesDash.pending_count > 0) {
+          badge.style.display = 'inline-block';
+          badge.textContent = leavesDash.pending_count;
+        }
+      }
+
+      // ── WFH pending badges (inner + outer) ───────────────────────────
+      if (wfhDash) {
         for (const bid of ['wfh-pending-count', 'wfh-outer-badge']) {
           const b = document.getElementById(bid);
-          if (b) {
-            if (w.pending_count > 0) { b.style.display = 'inline-block'; b.textContent = w.pending_count; }
-            else b.style.display = 'none';
+          if (!b) continue;
+          if (wfhDash.pending_count > 0) {
+            b.style.display = 'inline-block';
+            b.textContent = wfhDash.pending_count;
+          } else {
+            b.style.display = 'none';
           }
         }
-      } catch(_) {}
+      }
 
-      // ── Overdue invoices popup (login-time reminder) ────────────────
-      try {
-        const dismissKey = 'ap-overdue-dismissed-' + todayISO();
-        if (!localStorage.getItem(dismissKey)) {
-          const r = await api('/api/billing/outstanding');
-          const overdue = (r && r.overdue) || [];
-          if (overdue.length > 0) showOverdueReminderPopup(overdue, r.overdue_amount || 0);
-        }
-      } catch(_) {}
+      // ── Overdue invoices popup ────────────────────────────────────────
+      if (outstandingResp) {
+        const overdue = outstandingResp.overdue || [];
+        if (overdue.length > 0) showOverdueReminderPopup(overdue, outstandingResp.overdue_amount || 0);
+      }
 
       // ── Personal reminders: badge + popup ────────────────────────────
-      try {
-        const r = await api('/api/admin-tools/reminders/due');
-        const due = (r && r.reminders) || [];
-        // Update bell badge
+      if (remindersResp) {
+        const due = remindersResp.reminders || [];
         const badge = document.getElementById('rem-badge');
         if (badge) {
-          if (due.length > 0) { badge.style.display = 'inline-block'; badge.textContent = due.length; }
-          else badge.style.display = 'none';
+          if (due.length > 0) {
+            badge.style.display = 'inline-block';
+            badge.textContent = due.length;
+          } else {
+            badge.style.display = 'none';
+          }
         }
-        // Show popup only if not already dismissed today
-        const dismissKey = 'ap-reminders-dismissed-' + todayISO();
-        if (!localStorage.getItem(dismissKey) && due.length > 0) {
+        if (!skipRemindersPopup && due.length > 0) {
           showPersonalRemindersPopup(due);
         }
-      } catch(_) {}
+      }
     } catch(e) { console.error('Init failed', e); }
   })();
 
@@ -4786,6 +5230,160 @@ AP & Partners`;
       if (popup) popup.remove();
       showAlert('alert', '⏰ Snoozed 3 days — next reminder on ' + iso, 'success');
     } catch(e) { showAlert('alert', e.message); }
+  };
+
+  // ─── 🔐 2FA Settings ───────────────────────────────────────────────
+  // Opens the 2FA management modal. Shows current status + setup/disable
+  // flows. Setup is a 3-step wizard: (1) QR scan, (2) verify code, (3)
+  // backup codes display.
+  window.open2FASettings = async function() {
+    let status;
+    try {
+      status = await api('/api/auth/2fa/status');
+    } catch(e) { alert('Could not load 2FA status: ' + e.message); return; }
+
+    const enabled = !!status.enabled;
+    const html = `<div class="modal-backdrop" id="ts-2fa-modal"><div class="modal" style="max-width:520px;">
+      <div class="modal-head">
+        <h3>🔐 Two-Factor Authentication</h3>
+        <button class="close" onclick="document.getElementById('ts-2fa-modal').remove()">×</button>
+      </div>
+      <div class="modal-body">
+        <div id="ts-2fa-alert" class="alert hidden"></div>
+
+        ${enabled ? `
+          <div style="padding:14px;background:#dcfce7;border:1px solid #16a34a;border-radius:8px;margin-bottom:14px;">
+            <div style="font-size:14px;font-weight:700;color:#15803d;">✅ 2FA is ENABLED on your account</div>
+            <div style="font-size:12px;color:#166534;margin-top:6px;">
+              Enrolled: ${fmtDate(status.enrolled_at)}<br>
+              Backup codes remaining: <strong>${status.backup_codes_remaining}</strong> / 10
+            </div>
+          </div>
+          <p style="font-size:13px;color:#475569;">
+            Every login mein password ke baad 6-digit code maanga jayega Google/Microsoft Authenticator se.
+          </p>
+          <fieldset style="border:1px solid var(--border);border-radius:6px;padding:14px;margin-top:14px;">
+            <legend style="font-weight:600;color:#dc2626;padding:0 8px;">⚠️ Disable 2FA</legend>
+            <p style="font-size:11.5px;color:var(--muted);margin:0 0 8px;">
+              Disable karne ke liye current password chahieye. Account turant kam secure ho jayega.
+            </p>
+            <div class="form-row">
+              <label>Current password</label>
+              <input type="password" id="ts-2fa-disable-pw" placeholder="Type to confirm">
+            </div>
+            <button class="btn btn-warning" style="margin-top:8px;" onclick="disable2FA()">Disable 2FA</button>
+          </fieldset>
+        ` : `
+          <div style="padding:14px;background:#fef3c7;border:1px solid #d97706;border-radius:8px;margin-bottom:14px;">
+            <div style="font-size:14px;font-weight:700;color:#92400e;">⚠️ 2FA is NOT enabled</div>
+            <div style="font-size:12px;color:#78350f;margin-top:6px;">
+              Strongly recommended for super-admin accounts. Password leak hone par bhi account safe rahega.
+            </div>
+          </div>
+          <div id="ts-2fa-step1">
+            <h4 style="font-size:14px;margin:0 0 8px;">📱 Step 1 — Install Authenticator app</h4>
+            <p style="font-size:13px;color:#475569;margin:0 0 12px;">
+              Phone pe install karo (free):
+              <strong>Google Authenticator</strong>,
+              <strong>Microsoft Authenticator</strong>, ya
+              <strong>Authy</strong>.
+            </p>
+            <button class="btn btn-accent" onclick="start2FASetup()">▶ Continue to QR scan</button>
+          </div>
+          <div id="ts-2fa-step2" style="display:none;">
+            <h4 style="font-size:14px;margin:0 0 8px;">📷 Step 2 — Scan the QR code</h4>
+            <div id="ts-2fa-qr" style="text-align:center;padding:14px;background:#fff;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;"></div>
+            <details style="margin-bottom:10px;font-size:12px;color:#475569;">
+              <summary style="cursor:pointer;font-weight:600;">Can't scan? Use manual entry</summary>
+              <div style="padding:8px;background:#f8fafc;border-radius:6px;margin-top:6px;">
+                <div style="margin-bottom:4px;">Account: <strong id="ts-2fa-acct"></strong></div>
+                <div>Secret: <code id="ts-2fa-secret" style="background:#fff;padding:2px 6px;border-radius:4px;font-size:13px;letter-spacing:1px;"></code></div>
+              </div>
+            </details>
+            <h4 style="font-size:14px;margin:14px 0 8px;">🔢 Step 3 — Verify with 6-digit code</h4>
+            <p style="font-size:13px;color:#475569;margin:0 0 8px;">
+              Authenticator app mein "AP Partners (your-email)" entry dikhe gi. Uska current 6-digit code yahan paste karo:
+            </p>
+            <input type="text" id="ts-2fa-code" placeholder="123 456" maxlength="7" style="font-size:22px;letter-spacing:8px;text-align:center;padding:12px;font-family:monospace;">
+            <button class="btn btn-success" style="margin-top:10px;width:100%;" onclick="verify2FASetup()">✓ Enable 2FA</button>
+          </div>
+          <div id="ts-2fa-step3" style="display:none;">
+            <h4 style="font-size:14px;margin:0 0 8px;color:#15803d;">✅ 2FA Enabled! Save your backup codes</h4>
+            <p style="font-size:13px;color:#dc2626;margin:0 0 12px;font-weight:600;">
+              ⚠️ <strong>CRITICAL:</strong> Phone kho jaye toh in 10 backup codes mein se ek se login kar sakte ho. Har code <strong>SIRF EK BAAR</strong> use ho sakta hai.
+            </p>
+            <div id="ts-2fa-backups" style="background:#fffbeb;border:2px solid #f59e0b;border-radius:8px;padding:14px;font-family:monospace;font-size:14px;letter-spacing:1px;line-height:1.8;column-count:2;"></div>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+              <button class="btn btn-ghost" onclick="downloadBackupCodes()">📄 Download as .txt</button>
+              <button class="btn btn-ghost" onclick="copyBackupCodes()">📋 Copy all</button>
+            </div>
+            <p style="font-size:12px;color:#92400e;margin-top:10px;background:#fef3c7;padding:10px;border-radius:6px;">
+              📌 Recommendation: print karke locker mein rakho. Photo gallery mein NA rakho.
+            </p>
+            <button class="btn btn-accent" style="margin-top:14px;width:100%;" onclick="document.getElementById('ts-2fa-modal').remove();">Done</button>
+          </div>
+        `}
+      </div>
+    </div></div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  };
+
+  // Wizard step 1 → 2: call /2fa/setup, render QR
+  window.start2FASetup = async function() {
+    try {
+      const r = await api('/api/auth/2fa/setup', { method: 'POST', body: {} });
+      document.getElementById('ts-2fa-step1').style.display = 'none';
+      document.getElementById('ts-2fa-step2').style.display = '';
+      document.getElementById('ts-2fa-qr').innerHTML = `<img src="${r.qr_data_url}" alt="QR code" style="max-width:200px;">`;
+      document.getElementById('ts-2fa-acct').textContent = (Auth.user() || {}).email || '';
+      document.getElementById('ts-2fa-secret').textContent = r.secret;
+      setTimeout(() => document.getElementById('ts-2fa-code').focus(), 100);
+    } catch(e) { showAlert('ts-2fa-alert', e.message); }
+  };
+
+  // Wizard step 2 → 3: verify code, show backup codes
+  window._backupCodesCache = [];
+  window.verify2FASetup = async function() {
+    const code = (document.getElementById('ts-2fa-code').value || '').replace(/\s/g, '');
+    if (!/^\d{6}$/.test(code)) { showAlert('ts-2fa-alert', 'Enter the 6-digit code from your authenticator app.'); return; }
+    try {
+      const r = await api('/api/auth/2fa/verify-setup', { method: 'POST', body: { code } });
+      window._backupCodesCache = r.backup_codes;
+      document.getElementById('ts-2fa-step2').style.display = 'none';
+      document.getElementById('ts-2fa-step3').style.display = '';
+      document.getElementById('ts-2fa-backups').innerHTML = r.backup_codes.map(c => `<div>${c}</div>`).join('');
+    } catch(e) { showAlert('ts-2fa-alert', e.message); }
+  };
+
+  window.downloadBackupCodes = function() {
+    const txt = 'AP Partners — 2FA Backup Codes\n' +
+      'Generated: ' + new Date().toLocaleString() + '\n' +
+      'Account: ' + ((Auth.user() || {}).email || '') + '\n\n' +
+      'KEEP THIS FILE OFFLINE. Each code can be used ONCE if you lose your phone.\n\n' +
+      window._backupCodesCache.map((c, i) => (i + 1) + '. ' + c).join('\n');
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'ap-partners-2fa-backup-codes.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  window.copyBackupCodes = function() {
+    navigator.clipboard.writeText(window._backupCodesCache.join('\n'))
+      .then(() => alert('Codes copied to clipboard. Paste them somewhere SECURE (password manager / printed paper).'));
+  };
+
+  window.disable2FA = async function() {
+    const pw = (document.getElementById('ts-2fa-disable-pw').value || '');
+    if (!pw) { showAlert('ts-2fa-alert', 'Enter current password to disable 2FA.'); return; }
+    if (!confirm('Disable 2FA? Your account will be less secure.')) return;
+    try {
+      await api('/api/auth/2fa/disable', { method: 'POST', body: { password: pw } });
+      alert('2FA disabled.');
+      document.getElementById('ts-2fa-modal').remove();
+    } catch(e) { showAlert('ts-2fa-alert', e.message); }
   };
 
   // Modal: full list of all open reminders

@@ -10,6 +10,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
@@ -116,16 +117,39 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 
+// ─── gzip / brotli response compression ─────────────────────────────────────
+// admin.js is ~280 KB uncompressed. gzip brings it down to ~55 KB, which is
+// the single biggest perf win on the first page load for any user on a slow
+// link. Helmet's CSP / HSTS / etc. all set BEFORE compression so they apply
+// to compressed responses too. We skip compressing tiny responses (level 0)
+// because the overhead outweighs the gain.
+app.use(compression({
+  threshold: 1024,    // only compress responses larger than 1 KB
+  level: 6,           // default — good speed/ratio balance
+  // Respect the "x-no-compression" header for debugging.
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
+
 // Static frontend.
 // HTML files are served with no-cache so users always pick up the latest deploy
-// (the linked /js/*.js files are still cached by the browser, but their script
-// tags include a ?v=... cache-busting query string that's bumped on each deploy).
+// (the linked /js/*.js files are cache-busted via ?v=... so we can set very
+// aggressive immutable cache headers on them — the URL changes whenever the
+// content changes, so the browser will only re-fetch when the version bumps).
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res, filePath) => {
     if (filePath.endsWith('.html')) {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
+    } else if (/\.(js|css|woff2?|ttf|otf|png|jpe?g|svg|webp|gif|ico)$/i.test(filePath)) {
+      // Long-lived cache for fingerprinted assets. The HTML referencing them
+      // uses ?v=... query strings, so a new deploy invalidates by URL change,
+      // not by short TTL. immutable tells the browser to not even revalidate
+      // on F5 — only Ctrl+Shift+R will force re-fetch.
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     }
   }
 }));

@@ -280,6 +280,19 @@
             <input id="password" name="password" type="password" required
                    autocomplete="current-password" placeholder="••••••••">
           </div>
+
+          <!-- 2FA step (hidden initially, shown when server says need_2fa) -->
+          <div class="form-group" id="totp-group" style="display:none;">
+            <label for="totp-code">🔐 6-digit code from authenticator app</label>
+            <input id="totp-code" name="totp-code" type="text" maxlength="9"
+                   autocomplete="one-time-code" placeholder="123 456"
+                   style="font-size:22px;letter-spacing:8px;text-align:center;font-family:monospace;">
+            <div style="font-size:11px;color:#a09080;margin-top:6px;">
+              Don't have your phone? Use a <strong>backup code</strong> instead.
+              <a href="#" onclick="resetToPasswordStep(event)" style="color:var(--gold);text-decoration:underline;">← Back to password</a>
+            </div>
+          </div>
+
           <button class="btn-submit" type="submit" id="login-btn">Sign in</button>
         </form>
 
@@ -299,11 +312,15 @@
     (function () {
       const u = Auth.user();
       if (Auth.token() && u) {
-        location.href = ['admin','billing'].includes(u.role) ? '/admin' : '/associate';
+        // Admin panel roles include legacy 'admin'/'billing' plus the newer
+        // RBAC codes super_admin/hr/partner_view/accounts.
+        const code = u.role_code || u.role;
+        const ADMIN_ROLES = ['admin','billing','super_admin','hr','partner_view','accounts'];
+        location.href = ADMIN_ROLES.includes(code) ? '/admin' : '/associate';
       }
     })();
 
-    const ADMIN_PANEL_ROLES = ['admin', 'billing'];
+    const ADMIN_PANEL_ROLES = ['admin', 'billing', 'super_admin', 'hr', 'partner_view', 'accounts'];
 
     // Custom alert shower for login — overrides the 5-second auto-hide from
     // common.js so the user has time to read & retry. Also handles shake +
@@ -341,15 +358,70 @@
     document.getElementById('email').addEventListener('input', clearLoginError);
     document.getElementById('password').addEventListener('input', clearLoginError);
 
+    // 2FA state — captured between password step and code step
+    let pendingEmail = '', pendingPassword = '';
+
+    function show2FAStep() {
+      // Hide email/password rows, show TOTP input
+      document.getElementById('email').parentElement.style.display = 'none';
+      document.getElementById('password').parentElement.style.display = 'none';
+      document.getElementById('totp-group').style.display = '';
+      document.getElementById('login-btn').textContent = 'Verify & Sign in';
+      setTimeout(() => document.getElementById('totp-code').focus(), 50);
+    }
+
+    function resetToPasswordStep(ev) {
+      if (ev) ev.preventDefault();
+      document.getElementById('email').parentElement.style.display = '';
+      document.getElementById('password').parentElement.style.display = '';
+      document.getElementById('totp-group').style.display = 'none';
+      document.getElementById('totp-code').value = '';
+      document.getElementById('password').value = '';
+      pendingEmail = ''; pendingPassword = '';
+      document.getElementById('login-btn').textContent = 'Sign in';
+      clearLoginError();
+    }
+    window.resetToPasswordStep = resetToPasswordStep;
+
+    async function submitWithTOTP(code) {
+      const btn = document.getElementById('login-btn');
+      btn.disabled = true; btn.textContent = 'Verifying…';
+      try {
+        const res = await api('/api/auth/login', {
+          method: 'POST',
+          body: { email: pendingEmail, password: pendingPassword, totp_code: code }
+        });
+        Auth.setSession(res.token, res.user);
+        location.href = ADMIN_PANEL_ROLES.includes(res.user.role) ? '/admin' : '/associate';
+      } catch (err) {
+        showLoginError((err && err.message) || 'Invalid 2FA code');
+        document.getElementById('totp-code').value = '';
+        document.getElementById('totp-code').focus();
+      } finally {
+        btn.disabled = false; btn.textContent = 'Verify & Sign in';
+      }
+    }
+
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       clearLoginError();
+      // If we're in the 2FA "enter code" phase, submit code instead
+      const codeInput = document.getElementById('totp-code');
+      if (codeInput && codeInput.value) {
+        return submitWithTOTP(codeInput.value);
+      }
       const email    = document.getElementById('email').value.trim();
       const password = document.getElementById('password').value;
       const btn      = document.getElementById('login-btn');
       btn.disabled = true; btn.textContent = 'Signing in…';
       try {
         const res = await api('/api/auth/login', { method: 'POST', body: { email, password } });
+        if (res.need_2fa) {
+          // Show TOTP input — keep email/password staged for second submit
+          pendingEmail = email; pendingPassword = password;
+          show2FAStep();
+          return;
+        }
         Auth.setSession(res.token, res.user);
         location.href = ADMIN_PANEL_ROLES.includes(res.user.role) ? '/admin' : '/associate';
       } catch (err) {

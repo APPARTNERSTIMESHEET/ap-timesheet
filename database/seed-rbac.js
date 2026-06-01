@@ -60,6 +60,8 @@ const PERMISSIONS = [
   ['invoices.email',              'Billing',   'Email invoices',           'Send invoice PDF to client by email'],
   ['invoices.delete',             'Billing',   'Delete (soft) invoices',   'Move invoices to recycle bin'],
   ['invoices.restore',            'Billing',   'Restore invoices',         'Bring soft-deleted invoices back from recycle bin'],
+  ['invoices.mark_paid',          'Billing',   'Mark invoices paid',       'Record payments / mark as paid (for accounts staff)'],
+  ['invoices.tds_report',         'Billing',   'View TDS report',          'See TDS aggregation for Form 26AS reconciliation'],
 
   // Reports
   ['reports.hours',               'Reports',   'View hours reports',       'Hours summary, utilization, profitability'],
@@ -101,6 +103,7 @@ const ROLES = [
   { code: 'hr',           name: 'HR',              description: 'HR operations: leaves, holidays, user management, leave reports.',                     is_system: 1 },
   { code: 'partner_view', name: 'Partner (read-only)', description: 'Partners can view everything but make no changes.',                                is_system: 1 },
   { code: 'associate',    name: 'Associate',       description: 'Self-service: own timesheets, leaves, profile.',                                       is_system: 1 },
+  { code: 'accounts',     name: 'Accounts',        description: 'Read-only billing access: invoices, outstanding, TDS, payment tracking. No timesheets / users / masters / leaves.', is_system: 1 },
 ];
 
 // ─── 3. Role → Permission grants ─────────────────────────────────────────────
@@ -159,6 +162,24 @@ const GRANTS = {
     'timesheet.view_own','timesheet.create_own','timesheet.delete',
     'leaves.apply_own','leaves.view_own',
     'wfh.apply_own','wfh.view_own',
+  ],
+
+  // Accounts: dedicated for the firm's accounts staff. Read invoices, mark
+  // them paid/unpaid, run TDS + outstanding reports. Light view of clients
+  // (just to identify who owes what) but NO ability to modify clients/matters
+  // or see internal HR data. Designed for the person who does monthly
+  // collections + Form 26AS reconciliation, not invoice generation.
+  accounts: [
+    'clients.view',                                       // just to see client list/name
+    'invoices.view',                                       // read all invoices
+    'invoices.mark_paid',                                  // record payments — their core job
+    'invoices.tds_report',                                 // TDS aggregation for Form 26AS
+    'invoices.email',                                      // payment receipts / reminders
+    'reports.billing','reports.export',                    // financial reports + Excel
+    'leaves.apply_own','leaves.view_own',                  // own HR self-service only
+    'wfh.apply_own','wfh.view_own',                        // own WFH self-service only
+    // Intentionally NOT granted: invoices.create / .issue / .edit_draft /
+    //   .cancel / .delete — accounts shouldn't generate / modify invoices.
   ],
 };
 

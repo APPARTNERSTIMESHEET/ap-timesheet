@@ -455,6 +455,30 @@ function mainPage(doc, inv, items, currency, isDraft) {
       fmtAmt(grandINR),
       true, '#1c3d5a'
     );
+
+    // ── TDS deduction block (only for INR + when applicable) ─────────
+    // Shows client the TDS they will deduct + the net amount they remit.
+    const tdsApp     = !!Number(inv.tds_applicable);
+    const tdsRate    = Number(inv.tds_rate || 0);
+    const tdsAmt     = Number(inv.tds_amount || 0);
+    const tdsSection = inv.tds_section || '194J';
+    const netReceiv  = Number(inv.net_receivable || grandINR);
+    if (tdsApp && tdsAmt > 0) {
+      // Less: TDS row (light red tint for visibility)
+      svcRow(
+        `Less: TDS @ ${tdsRate}% u/s ${tdsSection} of Income Tax Act`,
+        '(' + fmtAmt(tdsAmt) + ')',
+        false,
+        '#fef2f2'
+      );
+      // Net Amount Receivable row (highlighted green — what client actually pays)
+      svcRow(
+        'Net Amount Receivable (after TDS deduction)',
+        fmtAmt(netReceiv),
+        true,
+        '#0f6b30'
+      );
+    }
   } else {
     if (hasDiscount) {
       svcRow('Gross Fees for Legal Services for the month of '+periodLabel(inv.period_from), fmtAmt(sub), false);

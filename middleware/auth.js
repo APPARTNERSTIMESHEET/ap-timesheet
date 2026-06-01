@@ -112,7 +112,7 @@ function authRequired(req, res, next) {
 // Roles that can access admin-level routes (LEGACY — being phased out in
 // favour of requirePermission). Kept so existing routes keep working until
 // they're migrated one-by-one.
-const ADMIN_ROLES = ['admin', 'billing', 'super_admin', 'hr'];
+const ADMIN_ROLES = ['admin', 'billing', 'super_admin', 'hr', 'accounts', 'partner_view'];
 
 function adminOnly(req, res, next) {
   if (!req.user) return res.status(403).json({ error: 'Admin only' });

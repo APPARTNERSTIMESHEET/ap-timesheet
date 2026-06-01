@@ -1,6 +1,8 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+const speakeasy = require('speakeasy');
+const QRCode = require('qrcode');
 const { db } = require('../utils/db');
 const { signToken, authRequired, writeAuditLog } = require('../middleware/auth');
 
@@ -88,7 +90,8 @@ router.post('/login', (req, res) => {
 
   // Find user (include security fields + role_code from joined roles table)
   const user = db.prepare(
-    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.designation,
+    `SELECT u.id, u.email, u.password_hash, u.full_name, u.role, u.designation, u.allowed_tabs,
+            u.totp_secret, u.totp_enabled,
             u.failed_login_count, u.locked_until, u.is_active, u.deleted_at,
             r.code AS role_code, r.name AS role_name
      FROM users u
@@ -137,7 +140,56 @@ router.post('/login', (req, res) => {
     return res.status(401).json({ error: `Invalid credentials${warn}` });
   }
 
-  // Case 5: Success!
+  // ── Case 5: Password verified. If user has 2FA enabled, demand TOTP code
+  //   before issuing the session token. Two flows:
+  //   - First call (no code yet): respond with { need_2fa: true } + a short-
+  //     lived "challenge" token (5 min) the client returns with the code.
+  //   - Second call (code present): verify TOTP + issue real session token.
+  //
+  //   Backup codes are 8-char single-use strings; if a user lost their phone,
+  //   they can submit a backup code in place of the TOTP. Used backup codes
+  //   are stripped from totp_backup_codes so they can't replay. ──
+  const submittedCode = (req.body.totp_code || '').toString().trim();
+  if (user.totp_enabled && user.totp_secret) {
+    if (!submittedCode) {
+      // First step — tell client to ask for the TOTP code. The client will
+      // re-POST to /api/auth/login with same email+password PLUS totp_code.
+      return res.json({ need_2fa: true });
+    }
+    // Verify TOTP. Allow ±1 step (30s) drift for clock skew.
+    let codeOk = speakeasy.totp.verify({
+      secret: user.totp_secret,
+      encoding: 'base32',
+      token: submittedCode.replace(/\s/g, ''),
+      window: 1
+    });
+    // If TOTP fails, try backup codes.
+    let usedBackup = null;
+    if (!codeOk) {
+      try {
+        const codes = JSON.parse(user.totp_backup_codes || '[]');
+        const idx = codes.indexOf(submittedCode.toUpperCase());
+        if (idx >= 0) {
+          codes.splice(idx, 1);   // consume code
+          db.prepare('UPDATE users SET totp_backup_codes = ? WHERE id = ?')
+            .run(JSON.stringify(codes), user.id);
+          codeOk = true;
+          usedBackup = true;
+        }
+      } catch (_) {}
+    }
+    if (!codeOk) {
+      handleFailedLogin(user);
+      recordLoginAttempt(email, ip, ua, false, '2fa_invalid_code');
+      return res.status(401).json({ error: 'Invalid 2FA code. Try again or use a backup code.' });
+    }
+    if (usedBackup) {
+      writeAuditLog(user.id, '2fa_backup_code_used', 'user', user.id,
+        'Backup code consumed at login from IP ' + ip);
+    }
+  }
+
+  // Case 5b: All checks passed.
   handleSuccessfulLogin(user, ip);
   recordLoginAttempt(email, ip, ua, true, null);
 
@@ -165,7 +217,10 @@ router.post('/login', (req, res) => {
       role: user.role,                  // legacy text role (admin/associate/billing)
       role_code: user.role_code,        // new RBAC role code (super_admin/hr/partner_view/etc.)
       role_name: user.role_name,        // human-readable role name
-      designation: user.designation
+      designation: user.designation,
+      // Per-user panel-access override (CSV of tab IDs). When non-null, the
+      // frontend uses ONLY these tabs instead of the role's default set.
+      allowed_tabs: user.allowed_tabs || null
     }
   });
 });
@@ -295,6 +350,130 @@ router.post('/users/:id/unlock', authRequired, (req, res) => {
     `Unlocked account for ${target.full_name} (${target.email})`);
 
   res.json({ ok: true, message: `Account unlocked for ${target.full_name}` });
+});
+
+// ════════════════════════════════════════════════════════════════════════
+// 2FA / TOTP endpoints
+// ════════════════════════════════════════════════════════════════════════
+
+// Generate a fresh TOTP secret + QR code image for the logged-in user.
+// User scans the QR with Google Authenticator / Microsoft Authenticator,
+// then calls /2fa/verify-setup with the first generated 6-digit code to
+// activate. Secret is staged (not enabled) until verified — so an interrupted
+// setup doesn't lock anyone out.
+router.post('/2fa/setup', authRequired, async (req, res) => {
+  try {
+    const user = db.prepare('SELECT id, email, totp_enabled FROM users WHERE id = ?').get(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.totp_enabled) {
+      return res.status(400).json({ error: '2FA already enabled. Disable first to re-enrol.' });
+    }
+
+    // Generate base32 secret (160 bits = 32 chars — RFC 6238 recommendation)
+    const secret = speakeasy.generateSecret({
+      name: `AP Partners (${user.email})`,
+      issuer: 'AP Partners',
+      length: 20
+    });
+
+    // Stage the secret (not enabled until verified)
+    db.prepare('UPDATE users SET totp_secret = ? WHERE id = ?').run(secret.base32, user.id);
+
+    // Generate QR code as data URL (PNG embedded as base64)
+    const qrDataURL = await QRCode.toDataURL(secret.otpauth_url);
+
+    res.json({
+      secret: secret.base32,               // for manual entry option
+      otpauth_url: secret.otpauth_url,     // app-compatible URL
+      qr_data_url: qrDataURL,               // <img src="..."> ready
+      message: 'Scan the QR code in Google/Microsoft Authenticator, then verify with the first 6-digit code.'
+    });
+  } catch (e) {
+    res.status(500).json({ error: '2FA setup failed: ' + e.message });
+  }
+});
+
+// Verify the first TOTP code + activate 2FA. Returns 10 backup codes for
+// the user to download / print and store offline. Each backup code is
+// single-use (consumed when used to log in).
+router.post('/2fa/verify-setup', authRequired, (req, res) => {
+  const { code } = req.body || {};
+  if (!code) return res.status(400).json({ error: 'Verification code required' });
+
+  const user = db.prepare('SELECT totp_secret, totp_enabled FROM users WHERE id = ?').get(req.user.id);
+  if (!user || !user.totp_secret) {
+    return res.status(400).json({ error: 'Run /2fa/setup first to generate a secret.' });
+  }
+  if (user.totp_enabled) return res.status(400).json({ error: '2FA already enabled.' });
+
+  const verified = speakeasy.totp.verify({
+    secret: user.totp_secret,
+    encoding: 'base32',
+    token: String(code).replace(/\s/g, ''),
+    window: 1
+  });
+  if (!verified) return res.status(400).json({ error: 'Code did not match. Re-scan QR and try the latest 6-digit code.' });
+
+  // Generate 10 backup codes (8 chars each, uppercased alphanumeric)
+  const backupCodes = [];
+  for (let i = 0; i < 10; i++) {
+    backupCodes.push(crypto.randomBytes(4).toString('hex').toUpperCase());
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET totp_enabled = 1,
+        totp_backup_codes = ?,
+        totp_enrolled_at = datetime('now')
+    WHERE id = ?
+  `).run(JSON.stringify(backupCodes), req.user.id);
+
+  writeAuditLog(req.user.id, '2fa_enabled', 'user', req.user.id,
+    'Enrolled via authenticator app');
+
+  res.json({
+    ok: true,
+    backup_codes: backupCodes,
+    message: 'SAVE these 10 backup codes offline. Each can be used ONCE if you lose your phone.'
+  });
+});
+
+// Disable 2FA. Requires current password to prevent CSRF + over-the-shoulder
+// disable. Audit-logged.
+router.post('/2fa/disable', authRequired, (req, res) => {
+  const { password } = req.body || {};
+  if (!password) return res.status(400).json({ error: 'Current password required to disable 2FA' });
+
+  const user = db.prepare('SELECT password_hash, totp_enabled FROM users WHERE id = ?').get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user.totp_enabled) return res.status(400).json({ error: '2FA not currently enabled' });
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: 'Wrong password' });
+  }
+
+  db.prepare(`
+    UPDATE users
+    SET totp_enabled = 0, totp_secret = NULL, totp_backup_codes = NULL, totp_enrolled_at = NULL
+    WHERE id = ?
+  `).run(req.user.id);
+
+  writeAuditLog(req.user.id, '2fa_disabled', 'user', req.user.id, 'Disabled by user');
+  res.json({ ok: true, message: '2FA has been disabled. Re-enrol anytime via /2fa/setup.' });
+});
+
+// Check current 2FA status for the logged-in user (used by the settings UI).
+router.get('/2fa/status', authRequired, (req, res) => {
+  const user = db.prepare(
+    'SELECT totp_enabled, totp_enrolled_at, totp_backup_codes FROM users WHERE id = ?'
+  ).get(req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  let remainingBackup = 0;
+  try { remainingBackup = JSON.parse(user.totp_backup_codes || '[]').length; } catch (_) {}
+  res.json({
+    enabled: !!user.totp_enabled,
+    enrolled_at: user.totp_enrolled_at,
+    backup_codes_remaining: remainingBackup
+  });
 });
 
 module.exports = router;
