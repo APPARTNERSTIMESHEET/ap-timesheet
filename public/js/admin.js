@@ -123,7 +123,7 @@
   // ─── Default dates ───────────────────────────────────────────────────
   setVal('af-from', monthStartISO());
   setVal('af-to',   todayISO());
-  setVal('wk-date', todayISO());
+  (function(){ const m = mondayOfWeek(new Date()); const s = new Date(m); s.setDate(m.getDate()+6); setVal('wk-from', isoFromDate(m)); setVal('wk-to', isoFromDate(s)); })();
   setVal('bi-from', monthStartISO());
   setVal('bi-to',   todayISO());
   setVal('bi-date', todayISO());
@@ -2675,36 +2675,41 @@ AP & Partners`;
     downloadCSV('utilization.csv', rows);
   };
 
-  // ─── WEEKLY TIMESHEET STATUS ─────────────────────────────────────────
-  // Who filled their weekly timesheet and who didn't. Uses /api/reports/by-user
-  // (LEFT JOIN → includes people with ZERO entries — exactly the ones we must
-  // flag), cross-referenced with /api/users so we only list timekeepers
-  // (associates + anyone with a timekeeper classification).
-  function mondayOfWeek(dateStr) {
-    const d = new Date(dateStr + 'T00:00:00');
-    const back = (d.getDay() + 6) % 7;   // 0 = Monday
-    d.setDate(d.getDate() - back);
-    return d;
-  }
+  // ─── TIMESHEET FILL STATUS (any date range) ───────────────────────────
+  // Who filled their timesheet in a chosen range and who is pending. Uses
+  // /api/reports/by-user (LEFT JOIN → includes people with ZERO entries — the
+  // ones we must flag), cross-referenced with /api/users so we only list
+  // timekeepers (associates + anyone with a timekeeper classification).
   function isoFromDate(d) {
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
   }
-  window.shiftWeek = function(deltaDays) {
-    const el = document.getElementById('wk-date');
-    const base = el && el.value ? new Date(el.value + 'T00:00:00') : new Date();
-    base.setDate(base.getDate() + deltaDays);
-    if (el) el.value = isoFromDate(base);
+  function mondayOfWeek(d) {
+    const x = new Date(d); const back = (x.getDay() + 6) % 7; x.setDate(x.getDate() - back); return x;
+  }
+  function workingDaysBetween(fromStr, toStr) {
+    let n = 0; const d = new Date(fromStr + 'T00:00:00'); const end = new Date(toStr + 'T00:00:00');
+    while (d <= end) { const wd = d.getDay(); if (wd >= 1 && wd <= 5) n++; d.setDate(d.getDate() + 1); }
+    return n;
+  }
+  window.wkQuick = function(preset) {
+    const now = new Date(); let from, to;
+    if (preset === 'this-week')       { from = mondayOfWeek(now); to = new Date(from); to.setDate(from.getDate() + 6); }
+    else if (preset === 'last-week')  { from = mondayOfWeek(now); from.setDate(from.getDate() - 7); to = new Date(from); to.setDate(from.getDate() + 6); }
+    else if (preset === 'this-month') { from = new Date(now.getFullYear(), now.getMonth(), 1); to = new Date(now.getFullYear(), now.getMonth() + 1, 0); }
+    else if (preset === 'last-month') { from = new Date(now.getFullYear(), now.getMonth() - 1, 1); to = new Date(now.getFullYear(), now.getMonth(), 0); }
+    else return;
+    setVal('wk-from', isoFromDate(from)); setVal('wk-to', isoFromDate(to));
     loadWeeklyStatus();
   };
   window.loadWeeklyStatus = async function() {
     const out = document.getElementById('wk-out'); if (!out) return;
-    const dateEl = document.getElementById('wk-date');
-    if (dateEl && !dateEl.value) dateEl.value = todayISO();
+    const from = document.getElementById('wk-from').value;
+    const to   = document.getElementById('wk-to').value;
+    if (!from || !to) { out.innerHTML = '<div class="empty" style="padding:12px;color:var(--muted)">Pick a From and To date.</div>'; return; }
+    if (from > to)   { out.innerHTML = '<div style="padding:12px;color:#991b1b">From date must be on or before To date.</div>'; return; }
     const targetPerDay = parseFloat(document.getElementById('wk-target').value) || 8;
-    const mon = mondayOfWeek(dateEl.value);
-    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
-    const from = isoFromDate(mon), to = isoFromDate(sun);
-    const expected = 5 * targetPerDay;   // Mon–Fri
+    const workDays = workingDaysBetween(from, to);
+    const expected = workDays * targetPerDay;
     out.innerHTML = '<div style="padding:12px;color:var(--muted)">Loading…</div>';
     try {
       const [usersResp, byUser] = await Promise.all([
@@ -2719,7 +2724,7 @@ AP & Partners`;
       });
       let rows = (byUser.rows || []).filter(r => timekeepers.has(r.id)).map(r => {
         const h = Number(r.total_hours) || 0;
-        const pct = expected > 0 ? (h / expected * 100) : 0;
+        const pct = expected > 0 ? (h / expected * 100) : (h > 0 ? 100 : 0);
         let st;
         if (h <= 0)         st = { key:'none',    label:'Not filled' };
         else if (pct < 60)  st = { key:'low',     label:'Low'        };
@@ -2731,7 +2736,6 @@ AP & Partners`;
       rows.sort((a,b) => order[a.st.key] - order[b.st.key] || a.hours - b.hours);
       const c = rows.reduce((m,r) => { m[r.st.key] = (m[r.st.key]||0)+1; return m; }, {});
       if (!rows.length) { out.innerHTML = '<div class="empty" style="padding:12px;color:var(--muted)">No associates found.</div>'; return; }
-      const fmtD = d => d.toLocaleDateString('en-IN', { day:'numeric', month:'short' });
       const badgeFor = k => k==='none'
         ? '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;">Not filled</span>'
         : k==='low'
@@ -2740,7 +2744,7 @@ AP & Partners`;
             ? '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">Partial</span>'
             : '<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">Complete</span>';
       out.innerHTML = `
-        <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Week: <strong>${fmtD(mon)} – ${fmtD(sun)}</strong> · Expected: ${expected}h (Mon–Fri × ${targetPerDay}h/day) · ${rows.length} associates</p>
+        <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Range: <strong>${from} → ${to}</strong> · ${workDays} working days · expected ${expected}h (${targetPerDay}h/day) · ${rows.length} people</p>
         <div class="kpi-grid-2" style="margin-bottom:16px">
           <div class="kpi2"><div class="kpi2-label">✅ Complete</div><div class="kpi2-val">${c.ok||0}</div></div>
           <div class="kpi2"><div class="kpi2-label">🟡 Partial</div><div class="kpi2-val">${c.partial||0}</div></div>
