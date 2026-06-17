@@ -2963,7 +2963,7 @@ AP & Partners`;
   };
 
   window.exportTDSReportExcel = function() {
-    if (!LAST_TDS_REPORT) { alert('Pehle "Run Report" click karo.'); return; }
+    if (!LAST_TDS_REPORT) { alert('Please click "Run Report" first.'); return; }
     if (typeof XLSX === 'undefined') { alert('XLSX library not loaded.'); return; }
     const wb = XLSX.utils.book_new();
 
@@ -3099,9 +3099,9 @@ AP & Partners`;
           <fieldset style="border:1px solid var(--border);border-radius:6px;padding:14px;margin-top:14px;">
             <legend style="padding:0 8px;font-weight:600;font-size:13px;color:#1e3a8a;">🛡️ Panel Access (Super-Admin Override)</legend>
             <p style="font-size:11.5px;color:var(--muted);margin:0 0 12px;">
-              Default panels aata hai role se. Yahan checkbox karke aap **per-user override** kar sakte ho —
-              e.g., ek "Billing" user ko Reports tab se hide kar do, ya "Accounts" user ko Timesheets bhi dikha do.
-              Sab uncheck = role default behaviour (no override).
+              Panels come from the user's role by default. Tick the boxes here to set a per-user override —
+              e.g., hide the Reports tab from a "Billing" user, or also show Timesheets to an "Accounts" user.
+              Uncheck everything = role default behaviour (no override).
             </p>
             ${(function(){
               const tabs = [
@@ -3264,7 +3264,7 @@ AP & Partners`;
           <legend style="padding:0 8px;font-weight:600;font-size:13px;color:#1e3a8a;">💸 TDS (Tax Deducted at Source)</legend>
           <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px;">
             If this client deducts TDS when paying, enable it. Invoices will auto-show: <em>"Less: TDS @ X%"</em> + <em>"Net Amount Receivable"</em>.
-            Year-end mein Form 26AS se reconcile karne ke liye useful.
+            Useful for reconciling against Form 26AS at year-end.
           </p>
           <div class="form-grid cols-3">
             <div class="form-row">
@@ -5364,12 +5364,12 @@ AP & Partners`;
             </div>
           </div>
           <p style="font-size:13px;color:#475569;">
-            Every login mein password ke baad 6-digit code maanga jayega Google/Microsoft Authenticator se.
+            On every login, after your password, you'll be asked for a 6-digit code from Google / Microsoft Authenticator.
           </p>
           <fieldset style="border:1px solid var(--border);border-radius:6px;padding:14px;margin-top:14px;">
             <legend style="font-weight:600;color:#dc2626;padding:0 8px;">⚠️ Disable 2FA</legend>
             <p style="font-size:11.5px;color:var(--muted);margin:0 0 8px;">
-              Disable karne ke liye current password chahieye. Account turant kam secure ho jayega.
+              Your current password is required to disable it. Your account will immediately become less secure.
             </p>
             <div class="form-row">
               <label>Current password</label>
@@ -5381,13 +5381,13 @@ AP & Partners`;
           <div style="padding:14px;background:#fef3c7;border:1px solid #d97706;border-radius:8px;margin-bottom:14px;">
             <div style="font-size:14px;font-weight:700;color:#92400e;">⚠️ 2FA is NOT enabled</div>
             <div style="font-size:12px;color:#78350f;margin-top:6px;">
-              Strongly recommended for super-admin accounts. Password leak hone par bhi account safe rahega.
+              Strongly recommended for super-admin accounts. Even if your password leaks, your account stays protected.
             </div>
           </div>
           <div id="ts-2fa-step1">
             <h4 style="font-size:14px;margin:0 0 8px;">📱 Step 1 — Install Authenticator app</h4>
             <p style="font-size:13px;color:#475569;margin:0 0 12px;">
-              Phone pe install karo (free):
+              Install on your phone (free):
               <strong>Google Authenticator</strong>,
               <strong>Microsoft Authenticator</strong>, ya
               <strong>Authy</strong>.
@@ -5406,7 +5406,7 @@ AP & Partners`;
             </details>
             <h4 style="font-size:14px;margin:14px 0 8px;">🔢 Step 3 — Verify with 6-digit code</h4>
             <p style="font-size:13px;color:#475569;margin:0 0 8px;">
-              Authenticator app mein "AP Partners (your-email)" entry dikhe gi. Uska current 6-digit code yahan paste karo:
+              An "AP Partners (your-email)" entry will appear in your authenticator app. Paste its current 6-digit code here:
             </p>
             <input type="text" id="ts-2fa-code" placeholder="123 456" maxlength="7" style="font-size:22px;letter-spacing:8px;text-align:center;padding:12px;font-family:monospace;">
             <button class="btn btn-success" style="margin-top:10px;width:100%;" onclick="verify2FASetup()">✓ Enable 2FA</button>
@@ -5414,7 +5414,7 @@ AP & Partners`;
           <div id="ts-2fa-step3" style="display:none;">
             <h4 style="font-size:14px;margin:0 0 8px;color:#15803d;">✅ 2FA Enabled! Save your backup codes</h4>
             <p style="font-size:13px;color:#dc2626;margin:0 0 12px;font-weight:600;">
-              ⚠️ <strong>CRITICAL:</strong> Phone kho jaye toh in 10 backup codes mein se ek se login kar sakte ho. Har code <strong>SIRF EK BAAR</strong> use ho sakta hai.
+              ⚠️ <strong>CRITICAL:</strong> If you lose your phone, you can log in using one of these 10 backup codes. Each code can be used <strong>ONLY ONCE</strong>.
             </p>
             <div id="ts-2fa-backups" style="background:#fffbeb;border:2px solid #f59e0b;border-radius:8px;padding:14px;font-family:monospace;font-size:14px;letter-spacing:1px;line-height:1.8;column-count:2;"></div>
             <div style="display:flex;gap:8px;margin-top:12px;">
@@ -5422,7 +5422,7 @@ AP & Partners`;
               <button class="btn btn-ghost" onclick="copyBackupCodes()">📋 Copy all</button>
             </div>
             <p style="font-size:12px;color:#92400e;margin-top:10px;background:#fef3c7;padding:10px;border-radius:6px;">
-              📌 Recommendation: print karke locker mein rakho. Photo gallery mein NA rakho.
+              📌 Recommendation: print these and keep them in a locker. Do NOT store them in your photo gallery.
             </p>
             <button class="btn btn-accent" style="margin-top:14px;width:100%;" onclick="document.getElementById('ts-2fa-modal').remove();">Done</button>
           </div>
