@@ -831,7 +831,7 @@
           </table>
         </div>` : `
         <div style="border:1px solid #86efac;background:#f0fdf4;border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#166534;font-weight:600;font-size:13px;">
-          ✅ All ${active.length} designated persons ne Code sign kiya aur Annexure 1 file kiya.
+          ✅ All ${active.length} designated persons have signed the Code and filed Annexure 1.
         </div>`);
       el('ins-dps-tbl').innerHTML = pendingBlock + (rows.length ? `
         <table class="table" style="font-size:12px;">
