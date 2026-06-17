@@ -228,9 +228,23 @@ router.post('/login', (req, res) => {
 // ─── Get current user ────────────────────────────────────────────────────────
 router.get('/me', authRequired, (req, res) => {
   const u = db.prepare(
-    'SELECT id, email, full_name, role, designation, default_rate FROM users WHERE id = ?'
+    `SELECT u.id, u.email, u.full_name, u.role, u.designation, u.default_rate,
+            u.allowed_tabs, r.code AS role_code, r.name AS role_name
+     FROM users u LEFT JOIN roles r ON r.id = u.role_id
+     WHERE u.id = ?`
   ).get(req.user.id);
-  res.json({ user: u });
+  // Resolve permission codes once so the frontend can hide tabs/buttons it
+  // can't use (server still enforces — this is purely UX).
+  const permissions = Array.from(req.user.permissions || []);
+  // Backwards-compatible shape: keep returning {user:{...}} but flatten the
+  // useful fields onto the top level too so insider.js and other modules can
+  // read j.role_code / j.permissions without digging.
+  res.json({
+    user: u,
+    role_code: u.role_code,
+    role_name: u.role_name,
+    permissions
+  });
 });
 
 // ─── Change password ─────────────────────────────────────────────────────────

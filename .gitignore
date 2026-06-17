@@ -13,3 +13,4 @@ logs/
 backups/
 *.bak
 db-scan-temp.js
+_predeploy_backup_*/

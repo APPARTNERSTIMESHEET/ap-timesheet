@@ -36,6 +36,12 @@
     if (tab === 'summary') loadMonthly();
     if (tab === 'leaves')  loadMyLeaves();
     if (tab === 'wfh')     loadMyWfh();
+    if (tab === 'insider') {
+      // Insider Trading Compliance is rendered + driven by insider.js. Inject
+      // the self-service markup on first open, then boot the loaders.
+      if (window.insRenderSelfService) window.insRenderSelfService('ins-self-host');
+      if (window.insBoot) window.insBoot();
+    }
   };
 
   // ── Week helpers ─────────────────────────────────────────────────────

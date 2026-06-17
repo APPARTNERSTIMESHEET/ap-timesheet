@@ -1039,6 +1039,357 @@
   </div>
 
   <!-- ══════ ACTIVITY LOG ══════ -->
+  <!-- ══════ INSIDER TRADING POLICY (SEBI compliance) ══════ -->
+  <section id="tab-insider" class="tab-panel">
+    <!-- Sub-tabs (CO sees more) -->
+    <div class="subtab-nav" id="ins-subtab-nav" style="margin:14px 14px 0;">
+      <button class="subtab-btn active" data-ins-sub="ins-my">My Compliance</button>
+      <button class="subtab-btn" data-ins-sub="ins-history">My History</button>
+      <button class="subtab-btn" data-ins-sub="ins-queue" data-perm="insider.review" style="display:none;">⚖️ Pre-Clearance Queue</button>
+      <button class="subtab-btn" data-ins-sub="ins-rl" data-perm="insider.restricted_list" style="display:none;">🔒 Restricted List</button>
+      <button class="subtab-btn" data-ins-sub="ins-upsi" data-perm="insider.upsi_log" style="display:none;">📋 UPSI Log</button>
+      <button class="subtab-btn" data-ins-sub="ins-dps" data-perm="insider.dp_admin" style="display:none;">👥 DP Roster</button>
+      <button class="subtab-btn" data-ins-sub="ins-audit" data-perm="insider.audit_trail" style="display:none;">🔍 Audit Trail</button>
+      <button class="subtab-btn" data-ins-sub="ins-config" data-perm="insider.config" style="display:none;">⚙️ Config</button>
+    </div>
+
+    <!-- ── MY COMPLIANCE ────────────────────────────────────────────────── -->
+    <div id="ins-my" class="subtab-panel active">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">🛡️ Insider Trading Policy — Status</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 14px;">
+          AP &amp; Partners Code of Conduct for Prohibition of Insider Trading, per SEBI
+          (Prohibition of Insider Trading) Regulations, 2015. Penalty for non-compliance:
+          ₹25 Cr OR 3× profits + up to 10 years imprisonment. Every Designated Person
+          must complete these 3 onboarding steps.
+        </p>
+        <div id="ins-status-cards" class="kpi-grid-3"></div>
+      </div>
+
+      <!-- ONE shared identity capture — signature + live photo, done once and
+           attached to every form submitted in this session. -->
+      <div class="card" style="margin:14px;border:2px solid #c7d2fe;">
+        <div class="card-title">🪪 Your Signature &amp; Photo — capture once</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Draw your signature and (optionally) take a live photo <b>once</b> here. It is
+          automatically attached to every form you submit below — Code acknowledgment,
+          relatives, holdings, and pre-clearance. No need to repeat on each form.
+        </p>
+        <div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;">
+          <div class="ins-sig" data-sig-for="me"></div>
+          <div class="ins-cam" data-cam-for="me"></div>
+        </div>
+      </div>
+
+      <!-- Step 1: Acknowledge Code (Annexure 2) -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">📜 Step 1 — Acknowledge the Code (Annexure 2)</div>
+        <div id="ins-ack-box">
+          <p style="font-size:13px;color:var(--text);line-height:1.6;">
+            I confirm that I have read, understood, and agree to comply with the
+            <b>AP &amp; Partners Code of Conduct for Prohibition of Insider Trading</b>.
+            I undertake, as a condition to my continued employment / relationship with APP,
+            to comply fully with the policies and procedures contained therein. I agree
+            that I will be subject to sanctions (including suspension) that may be
+            imposed by APP at its discretion for any violation.
+          </p>
+          <div class="form-row" style="display:flex;gap:10px;align-items:end;margin-top:12px;">
+            <div style="flex:1;">
+              <label class="form-label">Type your full name as signature</label>
+              <input class="form-control" id="ins-ack-name" placeholder="e.g. Mohd Amir">
+            </div>
+            <button class="btn btn-primary" onclick="insSignAck()">✍️ Sign &amp; Submit</button>
+          </div>
+        </div>
+        <div id="ins-ack-done" class="hidden" style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:8px;padding:12px;margin-top:8px;">
+          ✅ <b>Code acknowledged</b> on <span id="ins-ack-date"></span> — Annexure 2 signed.
+        </div>
+      </div>
+
+      <!-- Step 2: Annexure 1 — Immediate Relatives -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          👨‍👩‍👧 Step 2 — Immediate Relatives + Background (Annexure 1)
+          <span class="actions">
+            <span id="ins-anx1-status" style="font-size:11px;color:var(--muted);"></span>
+          </span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          List your Immediate Relatives (spouse, parents, siblings, children) and persons
+          with whom you share a material financial relationship (PwMFR — 25%+ of payer's
+          annual income via loan/gift in last 12 months). Also list your educational
+          institutions and previous employers.
+        </p>
+        <h4 style="font-size:13px;margin:14px 0 8px;">Relatives / PwMFR</h4>
+        <table class="table" id="ins-anx1-rel-tbl" style="font-size:12px;">
+          <thead>
+            <tr>
+              <th>Full Name</th>
+              <th>Status</th>
+              <th>Relation</th>
+              <th>PAN</th>
+              <th>Other ID</th>
+              <th>Contact</th>
+              <th>Fin. Dep?</th>
+              <th>Consults DP?</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn btn-sm btn-ghost" onclick="insAnx1AddRel()">➕ Add Relative / PwMFR</button>
+
+        <h4 style="font-size:13px;margin:18px 0 8px;">Educational Institutions</h4>
+        <table class="table" id="ins-anx1-edu-tbl" style="font-size:12px;">
+          <thead><tr><th>Institution</th><th>Years</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn btn-sm btn-ghost" onclick="insAnx1AddEdu()">➕ Add Institution</button>
+
+        <h4 style="font-size:13px;margin:18px 0 8px;">Previous Employers</h4>
+        <table class="table" id="ins-anx1-emp-tbl" style="font-size:12px;">
+          <thead><tr><th>Employer</th><th>Years</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn btn-sm btn-ghost" onclick="insAnx1AddEmp()">➕ Add Employer</button>
+
+        <div class="form-row" style="display:flex;gap:10px;align-items:end;margin-top:18px;border-top:1px solid var(--border);padding-top:14px;">
+          <div style="flex:1;">
+            <label class="form-label">Type your full name as signature</label>
+            <input class="form-control" id="ins-anx1-sign" placeholder="e.g. Mohd Amir">
+          </div>
+          <button class="btn btn-primary" onclick="insSubmitAnx1()">📤 Submit Annexure 1</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Annexure 3 — Securities Holdings -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          📈 Step 3 — Securities Holdings (Annexure 3)
+          <span class="actions">
+            <select class="form-control" id="ins-hold-type" style="font-size:12px;padding:5px 10px;">
+              <option value="initial">Initial (within 7 days of joining)</option>
+              <option value="annual">Annual (as of Mar 31, due Apr 30)</option>
+            </select>
+          </span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Declare securities held by you AND your Immediate Relatives. Excludes mutual fund
+          units. Add one row per security. If you hold zero securities, just submit empty.
+        </p>
+        <table class="table" id="ins-hold-tbl" style="font-size:12px;">
+          <thead>
+            <tr>
+              <th>Security / ISIN</th>
+              <th>Opening Bal</th>
+              <th>Increase (+)</th>
+              <th>Decrease (−)</th>
+              <th>Closing Bal</th>
+              <th>Broker / DP ID</th>
+              <th>Client ID / Folio</th>
+              <th>Held By</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <button class="btn btn-sm btn-ghost" onclick="insHoldAddRow()">➕ Add Security</button>
+
+        <div class="form-row" style="display:flex;gap:10px;align-items:end;margin-top:18px;border-top:1px solid var(--border);padding-top:14px;">
+          <div style="width:200px;">
+            <label class="form-label">As of date</label>
+            <input class="form-control" type="date" id="ins-hold-asof">
+          </div>
+          <div style="flex:1;">
+            <label class="form-label">Type your full name as signature</label>
+            <input class="form-control" id="ins-hold-sign" placeholder="e.g. Mohd Amir">
+          </div>
+          <button class="btn btn-primary" onclick="insSubmitHoldings()">📤 Submit Statement</button>
+        </div>
+      </div>
+
+      <!-- Pre-Clearance Request -->
+      <div class="card" style="margin:14px;">
+        <div class="card-title">
+          💰 Pre-Clearance Request (Annexure 4 + 5)
+          <span class="actions" style="font-size:11px;color:var(--muted);">Required for trades > ₹5,00,000</span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Submit BEFORE executing any trade above ₹5 lakh per security per FY.
+          Pre-clearance is valid for 7 trading days. Contra-trade restriction:
+          6 months from execution date.
+        </p>
+        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div>
+            <label class="form-label">Who's trading?</label>
+            <select class="form-control" id="ins-pc-kind">
+              <option value="self">Self</option>
+              <option value="immediate_relative">Immediate Relative</option>
+            </select>
+          </div>
+          <div id="ins-pc-trader-name-wrap" style="display:none;">
+            <label class="form-label">Relative's name</label>
+            <input class="form-control" id="ins-pc-trader-name">
+          </div>
+          <div>
+            <label class="form-label">Transaction</label>
+            <select class="form-control" id="ins-pc-txn">
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+              <option value="subscribe">Subscribe</option>
+              <option value="pledge">Pledge</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row" style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:10px;">
+          <div>
+            <label class="form-label">Security name *</label>
+            <input class="form-control" id="ins-pc-security" placeholder="e.g. Tata Consultancy Services Ltd">
+          </div>
+          <div>
+            <label class="form-label">ISIN</label>
+            <input class="form-control" id="ins-pc-isin" placeholder="INE467B01029">
+          </div>
+          <div>
+            <label class="form-label">Quantity *</label>
+            <input class="form-control" type="number" id="ins-pc-qty" min="1">
+          </div>
+        </div>
+        <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px;">
+          <div>
+            <label class="form-label">Qty held before</label>
+            <input class="form-control" type="number" id="ins-pc-qty-before" min="0" value="0">
+          </div>
+          <div>
+            <label class="form-label">Broker DP ID</label>
+            <input class="form-control" id="ins-pc-broker-dp">
+          </div>
+          <div>
+            <label class="form-label">Broker Client ID</label>
+            <input class="form-control" id="ins-pc-broker-client">
+          </div>
+        </div>
+
+        <!-- Annexure 5 declarations -->
+        <h4 style="font-size:13px;margin:18px 0 8px;">Annexure 5 — UPSI Declaration (all required)</h4>
+        <label class="ins-decl"><input type="checkbox" id="ins-pc-d1"> <span>I and my Immediate Relatives do not have access to, or have not received, any Unpublished Price Sensitive Information up to now.</span></label>
+        <label class="ins-decl"><input type="checkbox" id="ins-pc-d2"> <span>If I gain UPSI before completing the trade, I will inform the Compliance Officer immediately and refrain from trading until it becomes Generally Available.</span></label>
+        <label class="ins-decl"><input type="checkbox" id="ins-pc-d3"> <span>I and my Immediate Relatives have not contravened APP's Code of Conduct.</span></label>
+        <label class="ins-decl"><input type="checkbox" id="ins-pc-d4"> <span>I have made a full and true disclosure in this matter, and I indemnify APP against penalties imposed by SEBI or any statutory authority as a result of violations.</span></label>
+
+        <div class="form-row" style="display:flex;gap:10px;align-items:end;margin-top:14px;border-top:1px solid var(--border);padding-top:14px;">
+          <div style="flex:1;">
+            <label class="form-label">Type your full name as signature</label>
+            <input class="form-control" id="ins-pc-sign">
+          </div>
+          <button class="btn btn-primary" onclick="insSubmitPC()">📤 Submit Request</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── MY HISTORY ───────────────────────────────────────────────────── -->
+    <div id="ins-history" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">📋 My Pre-Clearance History
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="insLoadHistory()">↻ Refresh</button></span>
+        </div>
+        <div id="ins-pc-history" class="table-wrap"></div>
+      </div>
+      <div class="card" style="margin:14px;">
+        <div class="card-title">📜 My Holdings Statements</div>
+        <div id="ins-hold-history" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── PRE-CLEARANCE QUEUE (Compliance Officer) ─────────────────────── -->
+    <div id="ins-queue" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">⚖️ Pending Pre-Clearance Requests
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="insLoadQueue()">↻ Refresh</button></span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Per Section VI.B.b.iii: respond within 1 working day. The DP has 7 trading days
+          to execute after approval. Rejection itself constitutes UPSI — do not disclose
+          the reason to the DP.
+        </p>
+        <div id="ins-queue-tbl" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── RESTRICTED LIST ──────────────────────────────────────────────── -->
+    <div id="ins-rl" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">🔒 Restricted List
+          <span class="actions">
+            <label style="font-size:11px;color:var(--muted);"><input type="checkbox" id="ins-rl-history" onchange="insLoadRL()"> Show removed</label>
+            <button class="btn btn-sm btn-ghost" onclick="insLoadRL()">↻ Refresh</button>
+            <button class="btn btn-sm btn-primary" onclick="insRLAdd()">➕ Add Company</button>
+          </span>
+        </div>
+        <p style="font-size:12px;color:#b91c1c;margin:0 0 12px;font-weight:600;">
+          🔐 HIGHLY CONFIDENTIAL — Do not communicate this list to anyone outside APP.
+        </p>
+        <div id="ins-rl-tbl" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── UPSI LOG ─────────────────────────────────────────────────────── -->
+    <div id="ins-upsi" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">📋 UPSI Sharing Log (SEBI Database)
+          <span class="actions">
+            <button class="btn btn-sm btn-ghost" onclick="insLoadUPSI()">↻ Refresh</button>
+            <button class="btn btn-sm btn-primary" onclick="insUPSIAdd()">➕ Log Sharing Event</button>
+          </span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Per Section IV.I, every UPSI sharing event must be logged with recipient's PAN
+          + timestamp. Retention: minimum 5 years. Non-tamperable audit trail.
+        </p>
+        <div id="ins-upsi-tbl" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── DP ROSTER ────────────────────────────────────────────────────── -->
+    <div id="ins-dps" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">👥 Designated Persons Roster
+          <span class="actions">
+            <button class="btn btn-sm btn-ghost" onclick="insLoadDPs()">↻ Refresh</button>
+            <button class="btn btn-sm btn-primary" onclick="insDPAdd()">➕ Designate User</button>
+          </span>
+        </div>
+        <div id="ins-dps-tbl" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── AUDIT TRAIL ──────────────────────────────────────────────────── -->
+    <div id="ins-audit" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">🔍 Insider Module Audit Trail
+          <span class="actions"><button class="btn btn-sm btn-ghost" onclick="insLoadAudit()">↻ Refresh</button></span>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          5-year retention per SEBI. Non-tamperable.
+        </p>
+        <div id="ins-audit-tbl" class="table-wrap"></div>
+      </div>
+    </div>
+
+    <!-- ── CONFIG ───────────────────────────────────────────────────────── -->
+    <div id="ins-config" class="subtab-panel">
+      <div class="card" style="margin:14px;">
+        <div class="card-title">⚙️ Insider Policy Configuration</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+          Set the Compliance Officer, threshold, trade window, and contra-trade hold.
+          Per policy Section IV.D, only the Management Committee may change these.
+        </p>
+        <div id="ins-config-form"></div>
+      </div>
+    </div>
+  </section>
+
   <section id="tab-activity" class="tab-panel">
     <div class="card" style="margin:14px;">
       <div class="card-title">
@@ -1168,6 +1519,30 @@
 
   <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
   <script src="/js/common.js?v=20260527-2fa"></script>
-  <script src="/js/admin.js?v=20260527-2fa"></script>
+  <script src="/js/admin.js?v=20260604-insider"></script>
+  <script src="/js/insider.js?v=20260604e"></script>
+  <style>
+    /* Insider Trading Policy module — minor visual helpers */
+    .ins-decl {
+      display: flex; gap: 8px; align-items: flex-start;
+      padding: 8px 10px; margin: 4px 0;
+      background: #fef9c3; border: 1px solid #fde047; border-radius: 6px;
+      font-size: 12px; cursor: pointer;
+    }
+    .ins-decl input[type=checkbox] { margin-top: 2px; flex-shrink: 0; }
+    .ins-decl span { line-height: 1.5; }
+    #ins-status-cards .kpi-card { cursor: default; }
+    .ins-badge {
+      display: inline-block; padding: 2px 8px; border-radius: 10px;
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+    }
+    .ins-badge-pending  { background: #fef3c7; color: #92400e; }
+    .ins-badge-approved { background: #dcfce7; color: #166534; }
+    .ins-badge-rejected { background: #fee2e2; color: #991b1b; }
+    .ins-badge-executed { background: #dbeafe; color: #1e40af; }
+    .ins-badge-no-trade { background: #f3f4f6; color: #374151; }
+    .ins-badge-expired  { background: #f3f4f6; color: #6b7280; }
+    .ins-badge-rl       { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+  </style>
 </body>
 </html>
