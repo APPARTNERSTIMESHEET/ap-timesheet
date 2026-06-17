@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Admin — AP &amp; Partners</title>
-  <link rel="stylesheet" href="/css/styles.css?v=20260527-2fa">
+  <link rel="stylesheet" href="/css/styles.css?v=20260617-navfit">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
 </head>
@@ -325,6 +325,7 @@
       <div class="subtabs">
         <button class="subtab-btn active" data-stab="stab-rp-hours">Hours Summary</button>
         <button class="subtab-btn" data-stab="stab-rp-util">Utilization</button>
+        <button class="subtab-btn" data-stab="stab-rp-weekly">📅 Weekly Status</button>
         <button class="subtab-btn" data-stab="stab-rp-profit">Matter Profitability</button>
         <button class="subtab-btn" data-stab="stab-rp-tds">💸 TDS Report</button>
       </div>
@@ -358,6 +359,24 @@
             <div class="form-row" style="align-items:flex-end;"><button class="btn" onclick="loadUtilization()">Run</button></div>
           </div>
           <div id="util-out" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <div id="stab-rp-weekly" class="subtab-panel">
+        <div class="card">
+          <div class="card-title">Weekly timesheet status — kisne bhari, kiski missing</div>
+          <div class="form-grid cols-4">
+            <div class="form-row"><label>Week of (koi bhi din)</label><input type="date" id="wk-date"></div>
+            <div class="form-row"><label>Target hrs/day</label><input type="number" step="0.5" id="wk-target" value="8"></div>
+            <div class="form-row" style="align-items:flex-end;">
+              <div style="display:flex;gap:6px;">
+                <button class="btn btn-ghost btn-sm" onclick="shiftWeek(-7)">← Prev</button>
+                <button class="btn btn-ghost btn-sm" onclick="shiftWeek(7)">Next →</button>
+                <button class="btn" onclick="loadWeeklyStatus()">Run</button>
+              </div>
+            </div>
+          </div>
+          <div id="wk-out" style="margin-top:14px;"></div>
         </div>
       </div>
 
@@ -1519,8 +1538,8 @@
 
   <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
   <script src="/js/common.js?v=20260527-2fa"></script>
-  <script src="/js/admin.js?v=20260604-insider"></script>
-  <script src="/js/insider.js?v=20260604e"></script>
+  <script src="/js/admin.js?v=20260617-tabfix"></script>
+  <script src="/js/insider.js?v=20260617-views"></script>
   <style>
     /* Insider Trading Policy module — minor visual helpers */
     .ins-decl {

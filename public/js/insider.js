@@ -808,7 +808,32 @@
     try {
       const j = await api('GET', '/admin/dps');
       const rows = j.dps || [];
-      el('ins-dps-tbl').innerHTML = rows.length ? `
+      // ── Pending compliance: who hasn't signed the Code / filed Annexure 1 ──
+      const active = rows.filter(d => !d.removed_on);
+      const pending = active.filter(d => !(d.ack_count > 0) || !(d.anx1_count > 0));
+      const pendingBlock = !rows.length ? '' : (pending.length ? `
+        <div style="border:1px solid #fca5a5;background:#fef2f2;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+          <div style="font-weight:700;color:#991b1b;font-size:13px;margin-bottom:8px;">⚠️ Pending compliance — ${pending.length} of ${active.length} designated persons</div>
+          <table class="table" style="font-size:12px;background:#fff;">
+            <thead><tr><th>Name</th><th>Email</th><th>Code</th><th>Anx 1</th><th>Missing</th></tr></thead>
+            <tbody>${pending.map(d => {
+              const miss = [];
+              if (!(d.ack_count > 0)) miss.push('Code acknowledgment');
+              if (!(d.anx1_count > 0)) miss.push('Annexure 1');
+              return `<tr>
+                <td>${esc(d.full_name)}</td>
+                <td>${esc(d.email)}</td>
+                <td>${d.ack_count > 0 ? '✅' : '❌'}</td>
+                <td>${d.anx1_count > 0 ? '✅' : '❌'}</td>
+                <td style="color:#991b1b;">${miss.join(', ')}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>
+        </div>` : `
+        <div style="border:1px solid #86efac;background:#f0fdf4;border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#166534;font-weight:600;font-size:13px;">
+          ✅ All ${active.length} designated persons ne Code sign kiya aur Annexure 1 file kiya.
+        </div>`);
+      el('ins-dps-tbl').innerHTML = pendingBlock + (rows.length ? `
         <table class="table" style="font-size:12px;">
           <thead><tr>
             <th>Name</th><th>Email</th><th>DP Type</th><th>Designated</th>
@@ -826,7 +851,7 @@
               <td>${d.preclear_count}</td>
               <td>${d.removed_on ? '<span class="ins-badge ins-badge-no-trade">Removed</span>' : '<span class="ins-badge ins-badge-approved">Active</span>'}</td>
             </tr>`).join('')}</tbody>
-        </table>` : '<p style="padding:20px;color:var(--muted);">No designated persons yet.</p>';
+        </table>` : '<p style="padding:20px;color:var(--muted);">No designated persons yet.</p>');
     } catch (e) {
       el('ins-dps-tbl').innerHTML = `<p style="padding:20px;color:#991b1b;">Error: ${esc(e.message)}</p>`;
     }

@@ -123,6 +123,7 @@
   // ─── Default dates ───────────────────────────────────────────────────
   setVal('af-from', monthStartISO());
   setVal('af-to',   todayISO());
+  setVal('wk-date', todayISO());
   setVal('bi-from', monthStartISO());
   setVal('bi-to',   todayISO());
   setVal('bi-date', todayISO());
@@ -2674,6 +2675,103 @@ AP & Partners`;
     downloadCSV('utilization.csv', rows);
   };
 
+  // ─── WEEKLY TIMESHEET STATUS ─────────────────────────────────────────
+  // Who filled their weekly timesheet and who didn't. Uses /api/reports/by-user
+  // (LEFT JOIN → includes people with ZERO entries — exactly the ones we must
+  // flag), cross-referenced with /api/users so we only list timekeepers
+  // (associates + anyone with a timekeeper classification).
+  function mondayOfWeek(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const back = (d.getDay() + 6) % 7;   // 0 = Monday
+    d.setDate(d.getDate() - back);
+    return d;
+  }
+  function isoFromDate(d) {
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+  window.shiftWeek = function(deltaDays) {
+    const el = document.getElementById('wk-date');
+    const base = el && el.value ? new Date(el.value + 'T00:00:00') : new Date();
+    base.setDate(base.getDate() + deltaDays);
+    if (el) el.value = isoFromDate(base);
+    loadWeeklyStatus();
+  };
+  window.loadWeeklyStatus = async function() {
+    const out = document.getElementById('wk-out'); if (!out) return;
+    const dateEl = document.getElementById('wk-date');
+    if (dateEl && !dateEl.value) dateEl.value = todayISO();
+    const targetPerDay = parseFloat(document.getElementById('wk-target').value) || 8;
+    const mon = mondayOfWeek(dateEl.value);
+    const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+    const from = isoFromDate(mon), to = isoFromDate(sun);
+    const expected = 5 * targetPerDay;   // Mon–Fri
+    out.innerHTML = '<div style="padding:12px;color:var(--muted)">Loading…</div>';
+    try {
+      const [usersResp, byUser] = await Promise.all([
+        api('/api/users'),
+        api('/api/reports/by-user?from=' + from + '&to=' + to)
+      ]);
+      const users = (usersResp && usersResp.users) || [];
+      const timekeepers = new Map();
+      users.forEach(u => {
+        const role = u.role_code || u.role;
+        if (u.is_active && (role === 'associate' || u.timekeeper_classification)) timekeepers.set(u.id, u);
+      });
+      let rows = (byUser.rows || []).filter(r => timekeepers.has(r.id)).map(r => {
+        const h = Number(r.total_hours) || 0;
+        const pct = expected > 0 ? (h / expected * 100) : 0;
+        let st;
+        if (h <= 0)         st = { key:'none',    label:'Not filled' };
+        else if (pct < 60)  st = { key:'low',     label:'Low'        };
+        else if (pct < 100) st = { key:'partial', label:'Partial'    };
+        else                st = { key:'ok',      label:'Complete'   };
+        return { name: r.full_name, hours: h, pct, st };
+      });
+      const order = { none:0, low:1, partial:2, ok:3 };
+      rows.sort((a,b) => order[a.st.key] - order[b.st.key] || a.hours - b.hours);
+      const c = rows.reduce((m,r) => { m[r.st.key] = (m[r.st.key]||0)+1; return m; }, {});
+      if (!rows.length) { out.innerHTML = '<div class="empty" style="padding:12px;color:var(--muted)">No associates found.</div>'; return; }
+      const fmtD = d => d.toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+      const badgeFor = k => k==='none'
+        ? '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;">Not filled</span>'
+        : k==='low'
+          ? '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">Low</span>'
+          : k==='partial'
+            ? '<span style="background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">Partial</span>'
+            : '<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">Complete</span>';
+      out.innerHTML = `
+        <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Week: <strong>${fmtD(mon)} – ${fmtD(sun)}</strong> · Expected: ${expected}h (Mon–Fri × ${targetPerDay}h/day) · ${rows.length} associates</p>
+        <div class="kpi-grid-2" style="margin-bottom:16px">
+          <div class="kpi2"><div class="kpi2-label">✅ Complete</div><div class="kpi2-val">${c.ok||0}</div></div>
+          <div class="kpi2"><div class="kpi2-label">🟡 Partial</div><div class="kpi2-val">${c.partial||0}</div></div>
+          <div class="kpi2"><div class="kpi2-label">🔻 Low</div><div class="kpi2-val">${c.low||0}</div></div>
+          <div class="kpi2"><div class="kpi2-label">🔴 Not filled</div><div class="kpi2-val">${c.none||0}</div></div>
+        </div>
+        <div class="table-wrap"><table class="data">
+          <thead><tr><th>Associate</th><th class="num">Hours</th><th class="num">Expected</th><th>Status</th><th>Progress</th></tr></thead>
+          <tbody>${rows.map(r => {
+            const barCls = r.st.key==='ok' ? '' : (r.st.key==='partial' ? 'warn' : 'danger');
+            return `<tr style="${r.st.key==='none' ? 'background:#fef2f2;' : ''}">
+              <td>${escapeHtml(r.name||'')}</td>
+              <td class="num">${r.hours.toFixed(2)}</td>
+              <td class="num">${expected}</td>
+              <td>${badgeFor(r.st.key)}</td>
+              <td style="min-width:120px"><div class="util-bar"><div class="util-bar-fill ${barCls}" style="width:${Math.min(r.pct,100)}%"></div></div></td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table></div>
+        <div style="margin-top:8px"><button class="btn btn-ghost btn-sm" onclick="exportWeeklyCSV()">Export CSV</button></div>`;
+    } catch(e) {
+      out.innerHTML = '<div style="color:#991b1b;padding:12px">Error: ' + escapeHtml(e.message) + '</div>';
+    }
+  };
+  window.exportWeeklyCSV = function() {
+    const tbl = document.querySelector('#wk-out table.data');
+    if (!tbl) return;
+    const rows = [...tbl.querySelectorAll('tr')].map(tr => [...tr.querySelectorAll('th,td')].slice(0,4).map(c => c.textContent.trim()));
+    downloadCSV('weekly-timesheet-status.csv', rows);
+  };
+
   // ─── PROFITABILITY REPORT ─────────────────────────────────────────────
   window.loadProfitability = async function() {
     const cid = document.getElementById('pr-client').value;
@@ -3014,6 +3112,7 @@ AP & Partners`;
                 { id: 'tab-reports',     label: 'Reports' },
                 { id: 'tab-leaves',      label: 'Leaves & WFH' },
                 { id: 'tab-masters',     label: 'Masters' },
+                { id: 'tab-insider',     label: 'Insider' },
                 { id: 'tab-activity',    label: 'Activity Log' }
               ];
               const current = (u && u.allowed_tabs) ? u.allowed_tabs.split(',').map(s=>s.trim()).filter(Boolean) : [];
@@ -3456,7 +3555,7 @@ AP & Partners`;
 
   // ─── TABS ─────────────────────────────────────────────────────────────
   function switchTab(id) {
-    document.querySelectorAll('main > section.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('section.tab-panel').forEach(p => p.classList.remove('active'));
     const el = document.getElementById(id); if (el) el.classList.add('active');
     setActiveTab(id);
     if (id==='tab-dashboard')   loadDashboard();
