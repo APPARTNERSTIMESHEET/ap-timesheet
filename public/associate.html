@@ -38,6 +38,11 @@
           <polyline points="9 22 9 12 15 12 15 22"/>
         </svg>
       </button>
+      <button class="as-nav-btn" id="nav-insider" title="Insider Trading Compliance" onclick="switchAssocTab('insider')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </button>
     </div>
     <div class="as-sidebar-bottom">
       <!-- Password change is disabled for associates — HR / admin handles
@@ -334,6 +339,15 @@
       </div>
     </section>
 
+    <!-- ── INSIDER TRADING COMPLIANCE (SEBI) ─────────────────── -->
+    <!-- The self-service forms are injected by insider.js into #ins-self-host
+         so the markup lives in one place and stays in sync with the admin
+         panel. Associates are Designated Persons but never the Compliance
+         Officer, so they only see My Compliance + My History. -->
+    <section id="as-tab-insider" class="as-panel">
+      <div id="ins-self-host"></div>
+    </section>
+
   </div><!-- .as-main -->
 
   <!-- ── CONTEXT MENU (shared) ────────────────────────────── -->
@@ -366,6 +380,19 @@
 
   <!-- Cache-bust on every UI deploy — bump the v=YYYYMMDD-N string when JS/HTML changes -->
   <script src="/js/common.js?v=20260522-expense"></script>
-  <script src="/js/associate.js?v=20260522-expense"></script>
+  <script src="/js/associate.js?v=20260604-insider"></script>
+  <script src="/js/insider.js?v=20260604e"></script>
+  <style>
+    /* Insider Trading Policy — minimal helpers (associate portal) */
+    .ins-decl { display:flex;gap:8px;align-items:flex-start;padding:8px 10px;margin:4px 0;
+      background:#fef9c3;border:1px solid #fde047;border-radius:6px;font-size:12px;cursor:pointer; }
+    .ins-decl input[type=checkbox] { margin-top:2px;flex-shrink:0; }
+    .ins-decl span { line-height:1.5; }
+    .ins-badge { display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase; }
+    .ins-badge-pending{background:#fef3c7;color:#92400e;} .ins-badge-approved{background:#dcfce7;color:#166534;}
+    .ins-badge-rejected{background:#fee2e2;color:#991b1b;} .ins-badge-executed{background:#dbeafe;color:#1e40af;}
+    .ins-badge-no-trade{background:#f3f4f6;color:#374151;} .ins-badge-expired{background:#f3f4f6;color:#6b7280;}
+    #ins-subtab-nav .subtab-btn.active { background:var(--primary,#1e40af)!important;color:#fff!important;border-color:var(--primary,#1e40af)!important; }
+  </style>
 </body>
 </html>

@@ -245,6 +245,7 @@ app.use('/api/admin',       require('./routes/admin'));
 app.use('/api/leaves',      require('./routes/leaves'));
 app.use('/api/wfh',         require('./routes/wfh'));
 app.use('/api/admin-tools', require('./routes/admin-tools'));
+app.use('/api/insider',     require('./routes/insider'));
 
 // SPA fallback for known frontend pages.
 // Force no-cache so users always pick up the latest HTML on deploy. Linked JS

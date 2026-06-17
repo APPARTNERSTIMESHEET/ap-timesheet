@@ -387,6 +387,310 @@ CREATE TABLE IF NOT EXISTS ledes_exports (
   exported_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ledes_invoice ON ledes_exports(invoice_id);
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- INSIDER TRADING POLICY (SEBI Compliance) — Code of Conduct for Prohibition
+-- of Insider Trading, mandated by SEBI (Prohibition of Insider Trading)
+-- Regulations, 2015, Reg 9(2). AP & Partners as a consultant to listed
+-- companies must regulate trading by Designated Persons + their Immediate
+-- Relatives. Penalty for violation: ₹25 Cr OR 3× profits, whichever higher +
+-- up to 10 years imprisonment. So we audit-log EVERYTHING.
+-- ════════════════════════════════════════════════════════════════════════════
+
+-- 1. Designated Persons (DP) registry. A user can become a DP at any time
+-- (e.g., when promoted, or when joining a department that handles UPSI).
+-- Marks who is subject to this code. One row per user — toggle via active.
+CREATE TABLE IF NOT EXISTS insider_designated_persons (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER NOT NULL UNIQUE REFERENCES users(id),
+  -- Per policy Section I.A: partner | lawyer | intern | secretary | staff | other
+  dp_type         TEXT    NOT NULL CHECK (dp_type IN ('partner','lawyer','intern','secretary','staff','other')),
+  designated_on   TEXT    NOT NULL DEFAULT (date('now')),
+  designated_by   INTEGER REFERENCES users(id),
+  removed_on      TEXT,                                  -- NULL = active DP
+  removed_by      INTEGER REFERENCES users(id),
+  removal_reason  TEXT,
+  notes           TEXT,
+  created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_insider_dp_user ON insider_designated_persons(user_id);
+CREATE INDEX IF NOT EXISTS idx_insider_dp_active ON insider_designated_persons(removed_on);
+
+-- 2. ANNEXURE 1 — Immediate Relatives + PwMFR (Persons with Material Financial
+-- Relationship) + education + past employers. Submitted on joining +
+-- whenever the list changes. We keep a version history (statement_id).
+CREATE TABLE IF NOT EXISTS insider_annexure1_statements (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  submitted_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  submitted_ip    TEXT,
+  signature_name  TEXT    NOT NULL,        -- typed name acts as e-signature
+  is_current      INTEGER NOT NULL DEFAULT 1   -- superseded when a new one is filed
+);
+CREATE INDEX IF NOT EXISTS idx_insider_anx1_dp ON insider_annexure1_statements(dp_id);
+CREATE INDEX IF NOT EXISTS idx_insider_anx1_current ON insider_annexure1_statements(dp_id, is_current);
+
+CREATE TABLE IF NOT EXISTS insider_relatives (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id    INTEGER NOT NULL REFERENCES insider_annexure1_statements(id) ON DELETE CASCADE,
+  full_name       TEXT    NOT NULL,
+  relation_status TEXT    NOT NULL CHECK (relation_status IN ('immediate_relative','pwmfr')),
+  -- IR sub-relation: spouse | parent | sibling | child | spouse_parent | spouse_sibling | spouse_child
+  relation_type   TEXT,
+  pan             TEXT,                       -- or 'other_id' below
+  other_id_type   TEXT,                       -- Aadhaar / Passport / Voter ID
+  other_id_value  TEXT,
+  contact_phone   TEXT,
+  contact_email   TEXT,
+  financial_dep   INTEGER NOT NULL DEFAULT 0, -- depends on DP financially
+  consults_dp     INTEGER NOT NULL DEFAULT 0  -- consults DP for trade decisions
+);
+CREATE INDEX IF NOT EXISTS idx_insider_rel_statement ON insider_relatives(statement_id);
+
+CREATE TABLE IF NOT EXISTS insider_education (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id    INTEGER NOT NULL REFERENCES insider_annexure1_statements(id) ON DELETE CASCADE,
+  institution     TEXT NOT NULL,
+  years           TEXT                       -- "2015-2020" free-text
+);
+CREATE INDEX IF NOT EXISTS idx_insider_edu_statement ON insider_education(statement_id);
+
+CREATE TABLE IF NOT EXISTS insider_past_employers (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id    INTEGER NOT NULL REFERENCES insider_annexure1_statements(id) ON DELETE CASCADE,
+  employer        TEXT NOT NULL,
+  years           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_insider_emp_statement ON insider_past_employers(statement_id);
+
+-- 3. ANNEXURE 2 — Code Acknowledgment / e-Signature. Per Section V.B, every
+-- DP must sign certifying they read the Code. Versioned — a new revision of
+-- the Code triggers a fresh acknowledgment requirement.
+CREATE TABLE IF NOT EXISTS insider_code_versions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  version_label   TEXT NOT NULL UNIQUE,                  -- 'v1.0', 'v1.1-2026-jun'
+  effective_from  TEXT NOT NULL DEFAULT (date('now')),
+  pdf_filename    TEXT,                                   -- archive of the Code PDF
+  created_by      INTEGER REFERENCES users(id),
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS insider_acknowledgments (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  code_version_id INTEGER NOT NULL REFERENCES insider_code_versions(id),
+  signed_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+  signed_ip       TEXT,
+  signed_ua       TEXT,
+  signature_name  TEXT    NOT NULL,                       -- typed name as e-signature
+  UNIQUE(dp_id, code_version_id)                          -- can't double-sign same version
+);
+CREATE INDEX IF NOT EXISTS idx_insider_ack_dp ON insider_acknowledgments(dp_id);
+
+-- 4. ANNEXURE 3 — Statement of Securities Holdings. Required within 7 days of
+-- joining (initial) + annually before Apr 30 (annual statement).
+CREATE TABLE IF NOT EXISTS insider_holdings_statements (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  statement_type  TEXT    NOT NULL CHECK (statement_type IN ('initial','annual')),
+  as_of_date      TEXT    NOT NULL,                       -- date of declaration OR Mar 31
+  submitted_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  submitted_ip    TEXT,
+  signature_name  TEXT    NOT NULL,
+  attached_report TEXT                                     -- file path if broker-report uploaded
+);
+CREATE INDEX IF NOT EXISTS idx_insider_holdings_dp   ON insider_holdings_statements(dp_id);
+CREATE INDEX IF NOT EXISTS idx_insider_holdings_year ON insider_holdings_statements(dp_id, as_of_date);
+
+CREATE TABLE IF NOT EXISTS insider_holdings_lines (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement_id    INTEGER NOT NULL REFERENCES insider_holdings_statements(id) ON DELETE CASCADE,
+  security_name   TEXT    NOT NULL,
+  isin            TEXT,
+  opening_balance INTEGER NOT NULL DEFAULT 0,             -- nos. of securities
+  increase_qty    INTEGER NOT NULL DEFAULT 0,
+  decrease_qty    INTEGER NOT NULL DEFAULT 0,
+  closing_balance INTEGER NOT NULL DEFAULT 0,
+  dp_name_broker  TEXT,                                    -- e.g., "Zerodha"
+  dp_id_broker    TEXT,                                    -- broker DP ID
+  client_folio    TEXT,                                    -- client ID / folio (if physical)
+  held_by         TEXT NOT NULL DEFAULT 'self' CHECK (held_by IN ('self','immediate_relative')),
+  relative_name   TEXT                                     -- if held_by='immediate_relative'
+);
+CREATE INDEX IF NOT EXISTS idx_insider_hlines_statement ON insider_holdings_lines(statement_id);
+
+-- 5. ANNEXURE 4 + 5 — Pre-clearance Request (with UPSI declaration). Required
+-- for any single trade or series of trades > ₹5L per security per FY.
+CREATE TABLE IF NOT EXISTS insider_preclearance_requests (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  -- Who will execute the trade — self or named immediate relative
+  trader_kind     TEXT NOT NULL CHECK (trader_kind IN ('self','immediate_relative')),
+  trader_name     TEXT,                                    -- when trader_kind=immediate_relative
+  security_name   TEXT NOT NULL,
+  isin            TEXT,
+  txn_nature      TEXT NOT NULL CHECK (txn_nature IN ('buy','sell','subscribe','pledge','other')),
+  qty_proposed    INTEGER NOT NULL,
+  qty_held_before INTEGER NOT NULL DEFAULT 0,
+  broker_dp_id    TEXT,
+  broker_client_id TEXT,
+  -- Annexure 5 declarations (all must be true to submit)
+  decl_no_upsi             INTEGER NOT NULL DEFAULT 0,
+  decl_will_inform_if_upsi INTEGER NOT NULL DEFAULT 0,
+  decl_no_contravention    INTEGER NOT NULL DEFAULT 0,
+  decl_full_disclosure     INTEGER NOT NULL DEFAULT 0,
+  submitted_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  submitted_ip    TEXT,
+  signature_name  TEXT NOT NULL,
+  -- Status (set by Compliance Officer in approvals table)
+  status          TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending','approved','rejected','expired','executed','no_trade'))
+);
+CREATE INDEX IF NOT EXISTS idx_insider_pre_dp     ON insider_preclearance_requests(dp_id);
+CREATE INDEX IF NOT EXISTS idx_insider_pre_status ON insider_preclearance_requests(status);
+
+-- 6. ANNEXURE 6 — Approval / Rejection by Compliance Officer. Valid for 7
+-- Trading Days. If approved, the DP has 7 days to execute the trade.
+CREATE TABLE IF NOT EXISTS insider_preclearance_decisions (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id      INTEGER NOT NULL UNIQUE REFERENCES insider_preclearance_requests(id),
+  decided_by      INTEGER NOT NULL REFERENCES users(id),  -- compliance officer
+  decision        TEXT    NOT NULL CHECK (decision IN ('approved','rejected')),
+  decision_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+  valid_until     TEXT,                                     -- decision_at + 7 trading days
+  internal_note   TEXT,                                     -- CO's private note (e.g., why rejected)
+  approval_pdf    TEXT                                      -- archived Annexure 6 PDF path
+);
+CREATE INDEX IF NOT EXISTS idx_insider_decision_request ON insider_preclearance_decisions(request_id);
+
+-- 7. ANNEXURE 7 — Post-Trade Report. Must be filed within 7 days of execution.
+-- The 6-month contra-trade hold is enforced by checking against this table.
+CREATE TABLE IF NOT EXISTS insider_post_trade_reports (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id     INTEGER NOT NULL UNIQUE REFERENCES insider_preclearance_decisions(id),
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  holder_flag     TEXT NOT NULL DEFAULT 'F' CHECK (holder_flag IN ('F','J')),  -- First or Joint
+  isin            TEXT,
+  security_name   TEXT NOT NULL,
+  qty_traded      INTEGER NOT NULL,
+  trade_price     REAL NOT NULL,
+  broker_name     TEXT,
+  traded_at       TEXT NOT NULL,                            -- date of trade
+  submitted_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  submitted_ip    TEXT,
+  signature_name  TEXT NOT NULL,
+  contra_locked_until TEXT                                   -- traded_at + 6 months
+);
+CREATE INDEX IF NOT EXISTS idx_insider_ptr_dp       ON insider_post_trade_reports(dp_id);
+CREATE INDEX IF NOT EXISTS idx_insider_ptr_decision ON insider_post_trade_reports(decision_id);
+CREATE INDEX IF NOT EXISTS idx_insider_ptr_isin     ON insider_post_trade_reports(dp_id, isin);
+
+-- 8. ANNEXURE 8 — No Trade Report. Required if the approved trade is NOT
+-- executed within 7 days. Fresh pre-clearance must then be sought.
+CREATE TABLE IF NOT EXISTS insider_no_trade_reports (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  decision_id     INTEGER NOT NULL UNIQUE REFERENCES insider_preclearance_decisions(id),
+  dp_id           INTEGER NOT NULL REFERENCES insider_designated_persons(id),
+  reason          TEXT NOT NULL,
+  submitted_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  submitted_ip    TEXT,
+  signature_name  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_insider_ntr_dp ON insider_no_trade_reports(dp_id);
+
+-- 9. Restricted List — companies for which APP currently holds UPSI. Any
+-- pre-clearance for these companies is auto-rejected. Highly confidential —
+-- never exposed in API responses to non-CO users.
+CREATE TABLE IF NOT EXISTS insider_restricted_list (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  company_name    TEXT NOT NULL,
+  isin            TEXT,
+  scrip_code      TEXT,                                     -- BSE/NSE code
+  added_by_partner INTEGER REFERENCES users(id),            -- per policy: partner adds via conflict check
+  added_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  added_reason    TEXT,                                     -- which matter / engagement
+  removed_at      TEXT,                                     -- NULL = currently restricted
+  removed_by      INTEGER REFERENCES users(id),
+  removal_reason  TEXT,                                     -- e.g., "UPSI became public"
+  -- Internal matter link (optional)
+  matter_id       INTEGER REFERENCES matters(id)
+);
+CREATE INDEX IF NOT EXISTS idx_insider_rl_active ON insider_restricted_list(removed_at);
+CREATE INDEX IF NOT EXISTS idx_insider_rl_company ON insider_restricted_list(company_name);
+
+-- 10. UPSI Sharing Log — digital database per Section IV.I. Every time UPSI
+-- is shared (internally to a new DP or externally to a 3rd party), it's
+-- logged with PAN and time-stamped. Required by SEBI for audit.
+CREATE TABLE IF NOT EXISTS insider_upsi_log (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  restricted_id   INTEGER REFERENCES insider_restricted_list(id),
+  company_name    TEXT NOT NULL,
+  recipient_name  TEXT NOT NULL,
+  recipient_pan   TEXT,                                     -- PAN of recipient
+  recipient_other_id TEXT,                                  -- if PAN n/a
+  recipient_type  TEXT CHECK (recipient_type IN ('dp_internal','third_party','client','counsel','other')),
+  purpose         TEXT NOT NULL,                            -- "matter advice", "co-counsel briefing"
+  shared_by_user  INTEGER NOT NULL REFERENCES users(id),
+  shared_at       TEXT NOT NULL DEFAULT (datetime('now')),
+  shared_ip       TEXT,
+  matter_id       INTEGER REFERENCES matters(id)
+);
+CREATE INDEX IF NOT EXISTS idx_insider_upsi_restricted ON insider_upsi_log(restricted_id);
+CREATE INDEX IF NOT EXISTS idx_insider_upsi_shared_at ON insider_upsi_log(shared_at);
+
+-- 11. Insider Module Audit Trail — separate from main audit_log so we can
+-- retain for the SEBI-mandated 5 years independent of other purges.
+CREATE TABLE IF NOT EXISTS insider_audit_trail (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id         INTEGER REFERENCES users(id),
+  user_email      TEXT,                                     -- snapshot
+  user_name       TEXT,                                     -- snapshot
+  action          TEXT NOT NULL,                            -- 'anx1_submitted','anx4_submitted','approved','rejected','rl_added','upsi_logged' etc
+  entity_type     TEXT,                                     -- 'preclearance', 'restricted_list', 'holdings' ...
+  entity_id       INTEGER,
+  payload_json    TEXT,                                     -- snapshot of changed fields
+  ip              TEXT,
+  user_agent      TEXT,
+  at              TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_insider_audit_user ON insider_audit_trail(user_id);
+CREATE INDEX IF NOT EXISTS idx_insider_audit_at   ON insider_audit_trail(at);
+CREATE INDEX IF NOT EXISTS idx_insider_audit_action ON insider_audit_trail(action);
+
+-- 12. Annual Compliance Reviews — per Section IV.H, Management Committee
+-- reviews compliance at least once per FY.
+CREATE TABLE IF NOT EXISTS insider_annual_reviews (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  fy_label        TEXT NOT NULL UNIQUE,                      -- 'FY-2025-26'
+  total_dps       INTEGER,
+  anx2_complete   INTEGER,                                   -- DPs who signed code
+  anx3_complete   INTEGER,                                   -- DPs who filed annual holdings
+  preclearances   INTEGER,                                   -- total requests in the year
+  approvals       INTEGER,
+  rejections      INTEGER,
+  violations      INTEGER,
+  report_json     TEXT,                                      -- full report payload
+  reviewed_by     INTEGER REFERENCES users(id),
+  reviewed_at     TEXT,
+  remarks         TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 13. Compliance Officer config — singleton row, updated by Management
+-- Committee. Avoids hardcoding the CO's user_id anywhere.
+CREATE TABLE IF NOT EXISTS insider_config (
+  id                       INTEGER PRIMARY KEY CHECK (id = 1),  -- enforces single row
+  compliance_officer_id    INTEGER REFERENCES users(id),
+  interim_co_id            INTEGER REFERENCES users(id),        -- temporary CO if main unavailable
+  pre_clearance_threshold  REAL NOT NULL DEFAULT 500000,        -- ₹5L per policy
+  trade_window_days        INTEGER NOT NULL DEFAULT 7,          -- 7 trading days to execute
+  contra_trade_months      INTEGER NOT NULL DEFAULT 6,          -- 6-month contra hold
+  annual_deadline_day      INTEGER NOT NULL DEFAULT 30,         -- Apr 30
+  annual_deadline_month    INTEGER NOT NULL DEFAULT 4,
+  active_code_version_id   INTEGER REFERENCES insider_code_versions(id),
+  updated_by               INTEGER REFERENCES users(id),
+  updated_at               TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `;
 
 function ensureSchema() {
@@ -522,6 +826,30 @@ function ensureSchema() {
     // Lets super-admin restrict an "Accounts" person to ONLY billing tabs,
     // or grant a Billing user temporary access to Timesheets, etc.
     "ALTER TABLE users ADD COLUMN allowed_tabs TEXT",
+
+    // ── Insider Trading: drawn digital signatures ───────────────────────────
+    // Each form already captures a typed name + timestamp + IP. We now also
+    // store a hand-drawn signature as a base64 PNG data URL (electronic
+    // signature, valid under the IT Act 2000). NULL = typed-name only (older
+    // submissions / opted out).
+    "ALTER TABLE insider_acknowledgments        ADD COLUMN signature_image TEXT",
+    "ALTER TABLE insider_annexure1_statements   ADD COLUMN signature_image TEXT",
+    "ALTER TABLE insider_holdings_statements    ADD COLUMN signature_image TEXT",
+    "ALTER TABLE insider_preclearance_requests  ADD COLUMN signature_image TEXT",
+    "ALTER TABLE insider_post_trade_reports     ADD COLUMN signature_image TEXT",
+    "ALTER TABLE insider_no_trade_reports       ADD COLUMN signature_image TEXT",
+
+    // ── Insider Trading: live identity photo (webcam) ───────────────────────
+    // Optional base64 JPEG captured from the DP's webcam at sign-time. Proves
+    // the actual person signed (biometric-style identity evidence for SEBI
+    // inspection). Personal data under DPDP Act 2023 — stays on the firm's own
+    // India-resident server, used solely for compliance identity verification.
+    "ALTER TABLE insider_acknowledgments        ADD COLUMN photo_image TEXT",
+    "ALTER TABLE insider_annexure1_statements   ADD COLUMN photo_image TEXT",
+    "ALTER TABLE insider_holdings_statements    ADD COLUMN photo_image TEXT",
+    "ALTER TABLE insider_preclearance_requests  ADD COLUMN photo_image TEXT",
+    "ALTER TABLE insider_post_trade_reports     ADD COLUMN photo_image TEXT",
+    "ALTER TABLE insider_no_trade_reports       ADD COLUMN photo_image TEXT",
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch (e) { /* column already exists — skip */ }
@@ -568,6 +896,36 @@ function ensureSchema() {
     require('./seed-utbms').seedUTBMS();
   } catch (e) {
     console.error('[init] UTBMS seed failed:', e.message);
+  }
+
+  // Insider Trading Policy: seed initial config row + first Code version.
+  // Idempotent — safe to call on every boot.
+  try {
+    // Seed first Code version if none exist
+    const versionCount = db.prepare('SELECT COUNT(*) AS c FROM insider_code_versions').get().c;
+    if (versionCount === 0) {
+      db.prepare(
+        `INSERT INTO insider_code_versions (version_label, effective_from, pdf_filename)
+         VALUES (?, date('now'), ?)`
+      ).run('v1.0', 'AP-Partners-Insider-Trading-Policy-v1.0.pdf');
+      console.log('[init] Seeded insider Code v1.0');
+    }
+    // Seed singleton config if missing
+    const cfgExists = db.prepare('SELECT id FROM insider_config WHERE id = 1').get();
+    if (!cfgExists) {
+      const activeVer = db.prepare(
+        'SELECT id FROM insider_code_versions ORDER BY id DESC LIMIT 1'
+      ).get();
+      db.prepare(
+        `INSERT INTO insider_config (id, pre_clearance_threshold, trade_window_days,
+         contra_trade_months, annual_deadline_day, annual_deadline_month,
+         active_code_version_id)
+         VALUES (1, 500000, 7, 6, 30, 4, ?)`
+      ).run(activeVer ? activeVer.id : null);
+      console.log('[init] Seeded insider_config singleton (CO = unset, configure via UI)');
+    }
+  } catch (e) {
+    console.error('[init] Insider Trading seed failed:', e.message);
   }
 }
 

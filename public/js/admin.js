@@ -24,15 +24,19 @@
   // - Accounts        → Billing + Outstanding + Reports (collection focus)
   // - Admin/Super     → Everything
   const isAccounts = effectiveRole === 'accounts';
+  // NOTE: tab-insider (Insider Trading Policy / SEBI compliance) is granted to
+  // EVERY role. Per Section I.A of the policy, all Partners, Lawyers, Interns,
+  // Secretaries, and Admin/HR/Accounts/IT staff are Designated Persons and
+  // MUST be able to file their own Annexures (1, 2, 3, 4, 5, 7, 8).
   const tabsForRole = isHR
-    ? ['tab-leaves', 'tab-masters']
+    ? ['tab-leaves', 'tab-masters', 'tab-insider']
     : isAccounts
-      ? ['tab-billing', 'tab-outstanding', 'tab-reports']
+      ? ['tab-billing', 'tab-outstanding', 'tab-reports', 'tab-insider']
       : isPartnerView
-        ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports']
+        ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-insider']
         : isBilling
-          ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-masters']
-          : ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-leaves', 'tab-masters'];
+          ? ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-masters', 'tab-insider']
+          : ['tab-dashboard', 'tab-entries', 'tab-billing', 'tab-outstanding', 'tab-reports', 'tab-leaves', 'tab-masters', 'tab-insider'];
 
   // ── Per-user override: if super-admin set allowed_tabs on this user,
   // use ONLY those tabs (intersection). Lets the firm fine-tune access
@@ -63,6 +67,7 @@
       { id: 'tab-reports',     label: 'Reports' },
       { id: 'tab-leaves',      label: 'Leaves &amp; WFH' },
       { id: 'tab-masters',     label: 'Masters' },
+      { id: 'tab-insider',     label: '🛡️ Insider' },
     ];
     const visibleTabs = tabDefs.filter(t => effectiveTabs.includes(t.id));
     const tabButtons = visibleTabs.map(t =>
