@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AP FocusLock</string>
+    <string name="device_admin_description">
+        AP FocusLock ko device admin permissions chahiye taaki:
+        1. Focus Mode mein screen lock ho sake
+        2. Galat unlock attempts detect ho sake aur intruder ki photo li ja sake
+    </string>
+</resources>
